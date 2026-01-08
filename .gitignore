@@ -9,3 +9,4 @@ main.bin
 sgdk.bin
 *~
 *.swp
+tmp/

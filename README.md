@@ -1,4 +1,34 @@
-MDSDRV
+[![Release](https://jitpack.io/v/umjammer/vavi-sound-mdsdrv.svg)](https://jitpack.io/#umjammer/vavi-sound-mdsdrv)
+[![Java CI](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/maven.yml/badge.svg)](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/maven.yml)
+[![CodeQL](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/codeql.yml/badge.svg)](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/codeql.yml)
+![Java](https://img.shields.io/badge/Java-21-b07219)
+
+# vavi-sound-mdsdrv
+
+<img alt="logo" src="src/test/resources/duke_ewi.png" width="160" />
+
+🎹 Java version of MDSDRV.
+
+this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
+
+## Install
+
+* [maven](https://jitpack.io/#umjammer/vavi-sound-mdsdrv)
+
+## Usage
+
+
+## References
+
+* 
+
+## TODO
+
+* compiler
+
+---
+
+[Original](https://github.com/superctr/MDSDRV)
 ======
 A sound driver for Sega Mega Drive/Genesis.
 
