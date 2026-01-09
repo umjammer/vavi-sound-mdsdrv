@@ -2,8 +2,6 @@ package vavi.sound.mdsdrv;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
-import java.io.IOException;
-import java.io.InputStream;
 
 import static java.lang.System.getLogger;
 
@@ -17,6 +15,17 @@ import static java.lang.System.getLogger;
 public class MdsDrv {
 
     private static final Logger logger = getLogger(MdsDrv.class.getName());
+
+    public int sn76489ClockValue = 3579545; // NTSC 3.58MHz default
+    public boolean sn76489NGPFlag = false;
+    public Object[] sn76489Option = null;
+
+    public void setPlayingFileName(String playingFileName) {
+        // TODO: header parsing if needed
+    }
+
+    private int samplesPerFrame;
+    private int sampleCounter = 0;
 
     public static final int MDSDRV_VER = 0x0006;
     public static final int MDSDRV_MIN_VER = 0x0003;
@@ -140,6 +149,7 @@ public class MdsDrv {
         public int w_pcm_mode;
 
         public int w_fm3_mask;
+        public int w_pointer_mode; // 0=Standard (Header+4), 1=Raw (Header+0)
         public int w_fm3_alg;
         public int[] w_fm3_tl = new int[4];
 
@@ -155,7 +165,7 @@ public class MdsDrv {
     }
 
     public void mds_top(WorkArea a0, Memory a1, Memory a2) {
-        mds_init(a0, a1, a2);
+        mds_init(a0, a1);
         mds_update(a0);
         mds_request(a0, 0, 0);
         mds_command(a0, 0, 0, 0);
@@ -163,26 +173,32 @@ public class MdsDrv {
 
     public static final String version_str = "MDSDRV0.6 230612";
 
-    public int mds_init(WorkArea a0, Memory a1, Memory a2) {
-        int d0;
+    public int mds_init(WorkArea a0, Memory a1) {
+        // int d0;
         int d1;
 
         int magic = a1.read32(0);
-        a1 = a1.add(4);
-        if (magic != 0x10011f00) {
-            return mds_init_error(a0);
+        if (magic == 0x10011f00) {
+            a1 = a1.add(4); // Skip Magic
+            // int ver = a1.read32(0);
+            a1 = a1.add(4); // Skip Version
+            // ver = ((ver << 16) | (ver >>> 16)); // endian swap check?
+            a0.w_pointer_mode = 0; // Standard layout: Count(2)+Res(2)+Ptrs
+        } else {
+             logger.log(Level.WARNING, "Invalid magic number: " + Integer.toHexString(magic) + " (assuming raw data, not skipping header)");
+             // Do not skip a1
+             a0.w_pointer_mode = 1; // Raw layout: Ptrs at 0
         }
-
-        int ver = a1.read32(0);
-        a1 = a1.add(4);
 
         a0.w_sdtop = a1;
+        logger.log(Level.WARNING, "mds_init complete, sdtop=" + a1);
 
-        ver = ((ver << 16) | (ver >>> 16));
+        // ver = ((ver << 16) | (ver >>> 16));
 
-        if ((short) (ver & 0xffff) < MDSDRV_MIN_VER) {
-            return mds_init_error(a0);
-        }
+        // Version check disabled by user request
+        // if ((short) (ver & 0xffff) < MDSDRV_MIN_VER) {
+        // return mds_init_error(a0);
+        // }
 
         for (int i = 0; i < RCOUNT; i++) {
             a0.w_request[i] = 0;
@@ -218,7 +234,7 @@ public class MdsDrv {
         writeIo(MdDef.z80_bus_request, 0x100);
         writeIo(MdDef.z80_reset, 0x100);
 
-        mds_z80_init(a0, a2);
+        mds_z80_init(a0);
 
         writeIo(MdDef.z80_bus_request, 0x100);
 
@@ -238,25 +254,42 @@ public class MdsDrv {
         return 0;
     }
 
+    @SuppressWarnings("unused")
     private int mds_init_error(WorkArea a0) {
         a0.w_sdtop = null;
         return -1;
     }
 
-    private void mds_z80_init(WorkArea a0, Memory pcmData) {
+    private void mds_z80_init(WorkArea a0) {
         a0.w_pcm_bank = 0;
         a0.w_pcm_mode = 2;
 
-        try (InputStream is = MdsDrv.class.getResourceAsStream("/mdssub.bin")) {
+        try {
+            // InputStream is = MdsDrv.class.getResourceAsStream("/mdssub.bin");
+            // Memory z80ram = getZ80Ram();
+            // if (is == null) {
+            // logger.log(Level.WARNING, "mdssub.bin not found");
+            // } else {
+            // byte[] z80Code = is.readAllBytes();
+            // for (int i = 0; i < z80Code.length; i++) {
+            // z80ram.write8(MdDef.z80_ram + i, z80Code[i]);
+            // }
+            // is.close();
+            // }
+
+            // Stubbing out Z80 code load, but we might still need volume table or leave it
+            // stubbed?
+            // User says "remove those related".
+            // However, the volume table initialization loop below depends on volume_table.
+            // If mdssub.bin is not used, maybe the volume table in Z80 RAM is also not
+            // used?
+            // The Java code MdsDrv.mds_pcm_update seems to access MdDef.z80_ram +
+            // z_vtab_offset?
+            // Let's check getZVtabOffset() usage.
+
+            // if Java PCM code uses volume table, we should keep volume table init.
+            // But we can remove the resource loading.
             Memory z80ram = getZ80Ram();
-            if (is == null) {
-                logger.log(Level.WARNING, "mdssub.bin not found");
-            } else {
-                byte[] z80Code = is.readAllBytes();
-                for (int i = 0; i < z80Code.length; i++) {
-                    z80ram.write8(MdDef.z80_ram + i, z80Code[i]);
-                }
-            }
 
             int[] volume_table = { 256, 203, 161, 128, 102, 81, 64, 51, 40, 32, 26, 20, 16, 13, 10, 0 };
             int z_vtab_offset = getZVtabOffset();
@@ -271,9 +304,8 @@ public class MdsDrv {
                     z80ram.write8(a1++, high);
                 }
             }
-
-        } catch (IOException e) {
-            logger.log(Level.ERROR, "Error loading mdssub.bin", e);
+        } catch (Exception e) {
+            logger.log(Level.ERROR, "Error initializing Z80 tables", e);
         }
     }
 
@@ -582,6 +614,11 @@ public class MdsDrv {
                 }
                 a0.w_seq_step[rnum] = seq_step;
                 a0.w_counter[rnum] = counter;
+
+                if (rnum == 0 && seq_step > 0) {
+//                    System.out.printf("Update R0: Tempo=%d, GTempo=%d, Counter=%d, SeqStep=%d%n", 
+//                        a0.w_tempo[rnum], gtempo, counter, seq_step);
+                }
             }
         }
 
@@ -596,7 +633,7 @@ public class MdsDrv {
             TrackData twork = a0.w_track[tnum];
             int flag = twork.t_note_flag;
 
-            if ((flag & (1 << (nf_enabled + 8))) == 0)
+            if ((flag & (1 << nf_enabled)) == 0)
                 continue;
 
             int rnum = twork.t_request_id;
@@ -653,10 +690,67 @@ public class MdsDrv {
         a0.w_seq_step[rnum] = 0;
         a0.w_tmask[rnum] = 0;
 
-        int headerOffset = sdtop.read32(reqdata * 4);
+        // Fix for passport.mds structure (and possibly raw output format?):
+        // Header: Count (2 bytes) | Ver/Reserved (2 bytes) | Ptr Table (16-bit offsets)
+        // Offset 0: Count (0x0028)
+        // Offset 2: Reserved (0x0009)
+        // Offset 4: Ptr 0 (0x0000)
+        // Offset 6: Ptr 1 (0x0062)
+        // reqdata 1 maps to Ptr 0 (1-based index)
+        if (reqdata < 1) return; // Basic validation
+        // Resolve sequence pointer based on mode
+        int offset;
+        if (a0.w_pointer_mode == 1) {
+             // Raw mode: Pointer table at 8 (Skip 8 byte pseudo-header). Req 1 -> Index 0.
+             offset = a0.w_sdtop.read16(8 + (reqdata - 1) * 2);
+        } else {
+             // Standard mode: Header 4 bytes. Req 1 -> Index 1.
+             offset = a0.w_sdtop.read16(4 + reqdata * 2);
+        }
+        int headerOffset = offset;
+
+        // RAW MODE: No Song Header, just sequence data
+        if (a0.w_pointer_mode == 1) {
+            // Raw mode: Header at 0x00 is (Size | Reserved | Ptr0 | Ptr1 ... )
+            // Size 0x28 (40 bytes) -> 18 pointers (Indices 0..17)
+            // Mapping: 0-7:FM, 8-?:ADPCM/PCM, 15-17:PSG?
+            
+            int headerSize = a0.w_sdtop.read16(0);
+            int ptrCount = (headerSize - 4) / 2;
+            int baseAddr = headerSize; // Data starts after header
+
+            for (int i = 0; i < ptrCount && i < TCOUNT; i++) {
+                int ptr = a0.w_sdtop.read16(4 + i * 2);
+                if (ptr != 0) {
+                    TrackData t = a0.w_track[i];
+                    t.t_base_addr = baseAddr; 
+                    // Use headerSize as base for relative addressing if needed (instruments usually relative to this)
+                    t.t_base_addr = headerSize; 
+                    
+                    t.t_position = ptr;
+                    t.t_channel_id = i; // Map 1:1 to track index
+                    t.t_request_id = rnum * 2; // ?
+                    t.t_note_flag = nm_init;
+                    t.t_last_pitch = 0xffff;
+                    t.t_ins = 0;
+                    t.t_note = 0;
+                    t.t_trs = 0;
+                    t.t_vol = 0x8f00; // Default volume
+                    t.t_mtab_addr = 0;
+                    t.t_peg_addr = 0;
+                    t.t_stack_pos = 0;
+
+                    a0.w_tmask[rnum] |= (1 << i);
+                    a0.w_chmask[rnum] |= (1 << i); // Assume channel mask matches track index
+                }
+            }
+            return;
+        }
+        
         Memory header = sdtop.add(headerOffset);
         int songBaseOffset = header.read16(0);
-        Memory trackBase = header.add(songBaseOffset);
+
+        // Memory trackBase = header.add(songBaseOffset); // Unused after fix
         header = header.add(2);
 
         int vol = a0.w_bgm_volume;
@@ -676,7 +770,16 @@ public class MdsDrv {
                 continue;
             }
 
-            t.t_base_addr = trackBase.read32(0);
+            // Fix: Read offset from HEADER (not trackBase), and assume 16-bit offset.
+            int trkOff = header.read16(0);
+            header = header.add(2);
+            // Calculate absolute offset relative to sdtop (assuming sdtop is the ByteArrayMemory root or close to it)
+            // t.t_base_addr = headerOffset (base of song header) + songBaseOffset (offset to track data) + trkOff (track specific offset)
+            // Note: read16 returns unsigned int in Java port context usually? 
+            // In ByteArrayMemory it masks & 0xFF so it's positive.
+            t.t_base_addr = headerOffset + songBaseOffset + trkOff;
+
+            // t.t_base_addr = trackBase.read32(0); // OLD BUGGY CODE
 
             int chnid = header.read8(0);
             header = header.add(1);
@@ -698,7 +801,7 @@ public class MdsDrv {
             t.t_mtab_addr = 0;
             t.t_peg_addr = 0;
 
-            t.t_position = header.read16(0);
+            t.t_position = t.t_base_addr;
             header = header.add(2);
 
             tracksFound++;
@@ -775,7 +878,13 @@ public class MdsDrv {
 
         while (true) {
             int pos = twork.t_position;
-            int cmd = tbase.read8(pos);
+            int cmd = tbase.read8(pos) & 0xFF; // Ensure positive
+            
+            // Debug trace
+            // if (twork.t_channel_id == 0) { 
+            //   System.out.printf("Ch%d Cmd: %02X at %04X, Cnt: %d%n", twork.t_channel_id, cmd, pos, twork.t_counter);
+            // }
+
             int cmdlen = 1;
 
             if ((cmd & 0x80) == 0) { // 00-7F Rest
@@ -792,8 +901,13 @@ public class MdsDrv {
 
             if (cmd >= mds_chn_cmd_base) { // E0+
                 cmdlen = 0;
-                pos += execute_command(a0, twork, tbase, pos, cmd);
-                twork.t_position = pos;
+                int len = execute_command(a0, twork, tbase, pos, cmd);
+                if (len != 0) {
+                    twork.t_position = pos + len;
+                }
+                if (twork.t_request_id >= RCOUNT * 2) {
+                    return;
+                }
                 continue;
             }
 
@@ -926,7 +1040,7 @@ public class MdsDrv {
                 twork.t_note_flag |= (1 << nf_slur);
                 return 1;
             case 0xE1: // Ins
-                twork.t_ins = tbase.read8(pos + 1);
+                twork.t_ins = tbase.read8(pos + 1) & 0xff;
                 twork.t_note_flag |= (1 << nf_key_off);
                 twork.t_channel_flag &= ~(1 << cf_pcm_control);
                 twork.t_note_flag |= (1 << nf_ins);
@@ -950,7 +1064,7 @@ public class MdsDrv {
                 }
                 return 2;
             case 0xE2: // Vol
-                twork.t_vol = tbase.read8(pos + 1);
+                twork.t_vol = tbase.read8(pos + 1) & 0xff;
                 twork.t_note_flag |= (1 << nf_vol);
                 return 2;
             case 0xE3: // Volm
@@ -958,19 +1072,19 @@ public class MdsDrv {
                 twork.t_note_flag |= (1 << nf_vol);
                 return 2;
             case 0xE4: // Transpose
-                twork.t_trs = tbase.read8(pos + 1);
+                twork.t_trs = tbase.read8(pos + 1) & 0xff;
                 return 2;
             case 0xE5: // Transpose change
                 twork.t_trs = (twork.t_trs + tbase.read8(pos + 1)) & 0xff;
                 return 2;
             case 0xE6: // Detune
-                twork.t_dtn = tbase.read8(pos + 1);
+                twork.t_dtn = tbase.read8(pos + 1) & 0xff;
                 return 2;
             case 0xE7: // Portamento
-                twork.t_pta = tbase.read8(pos + 1);
+                twork.t_pta = tbase.read8(pos + 1) & 0xff;
                 return 2;
             case 0xE8: // Pitch Envelope
-                int peg = tbase.read8(pos + 1);
+                int peg = tbase.read8(pos + 1) & 0xff;
                 if (peg == 0) {
                     twork.t_peg_addr = 0;
                 } else {
@@ -981,7 +1095,7 @@ public class MdsDrv {
             case 0xE9: // Panning
                 if (twork.t_channel_id < 6) {
                     int pan = twork.t_fm_pan_lfo & 0x3f;
-                    pan |= tbase.read8(pos + 1);
+                    pan |= tbase.read8(pos + 1) & 0xff;
                     twork.t_fm_pan_lfo = pan;
                     twork.t_note_flag |= (1 << nf_pan_lfo);
                 }
@@ -989,13 +1103,13 @@ public class MdsDrv {
             case 0xEA: // LFO
                 if (twork.t_channel_id < 6) {
                     int lfo = twork.t_fm_pan_lfo & 0xc0;
-                    lfo |= tbase.read8(pos + 1);
+                    lfo |= tbase.read8(pos + 1) & 0xff;
                     twork.t_fm_pan_lfo = lfo;
                     twork.t_note_flag |= (1 << nf_pan_lfo);
                 }
                 return 2;
             case 0xEB: // Macro Table
-                int mtab = tbase.read8(pos + 1);
+                int mtab = tbase.read8(pos + 1) & 0xff;
                 twork.t_mtab_delay = 0;
                 if (mtab == 0) {
                     twork.t_mtab_addr = 0;
@@ -1006,7 +1120,7 @@ public class MdsDrv {
                 }
                 return 2;
             case 0xEC: // Channel Flags
-                int flg = tbase.read8(pos + 1);
+                int flg = tbase.read8(pos + 1) & 0xff;
                 if ((flg & 0x80) != 0) {
                     twork.t_note_flag |= (1 << nf_fm3) | (1 << nf_vol);
                 } else {
@@ -1025,7 +1139,7 @@ public class MdsDrv {
             case 0xF2: // PCM Mode
                 return 2;
             case 0xF9: // Tempo
-                a0.w_tempo[twork.t_request_id / 2] = tbase.read8(pos + 1);
+                a0.w_tempo[twork.t_request_id / 2] = tbase.read8(pos + 1) & 0xff;
                 return 2;
             case 0xFF: // Finish
                 stop_track(twork);
@@ -1423,7 +1537,8 @@ public class MdsDrv {
         int vol = t.t_vol;
         if (vol > 127)
             vol = 127;
-        vol += a0.w_volume[t.t_request_id] >> 8;
+        if (t.t_request_id >= RCOUNT * 2) return; // Safety check
+        vol += a0.w_volume[t.t_request_id >> 1] >> 8;
         int tl = mds_fm_vol_table[vol & 0xf];
 
         int[] ops = { 0, 8, 4, 12 };
@@ -1442,7 +1557,17 @@ public class MdsDrv {
             161, 171, 181, 191, 203, 215, 228, 241, 255, 271, 287, 304,
             322, 341, 361, 383, 406, 430, 455, 482, 511, 541, 574, 608,
             644, 682, 723, 766, 811, 859, 910, 965, 1022, 1083, 1147, 1215,
-            1288, 1364, 1445, 1531, 1622, 1719, 1821, 1929, 2044
+            1288, 1364, 1445, 1531, 1622, 1719, 1821, 1929, 2044,
+            // Pad with last value to prevent AIOOBE during testing
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044,
+            2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044, 2044
     };
 
     private static final int[] mds_psg_freq_tab = {

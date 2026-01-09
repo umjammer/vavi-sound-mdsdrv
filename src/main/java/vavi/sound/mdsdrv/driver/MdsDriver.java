@@ -19,7 +19,6 @@ import vavi.sound.mdsdrv.Memory;
 
 import static java.lang.System.getLogger;
 
-
 public class MdsDriver extends MdsDrv implements IDriver {
 
     private static final Logger logger = getLogger(MdsDriver.class.getName());
@@ -29,13 +28,17 @@ public class MdsDriver extends MdsDrv implements IDriver {
 
     // Chip write callbacks from IDriver consumers
     private Consumer<ChipDatum> writeOPNA; // Primary FM (YM2612 treated as OPNA/B/compat)
-    // We assume index 0 is the main chip.
+    private Consumer<ChipDatum> writePSG; // SN76489
 
     @Override
     public void init(List<ChipAction> chipsConsumer, MmlDatum[] srcBuf,
             Function<String, Stream> appendFileReaderCallback, Object... additionalOption) {
         if (chipsConsumer != null && !chipsConsumer.isEmpty()) {
             this.writeOPNA = chipsConsumer.get(0)::writeRegister;
+            if (chipsConsumer.size() > 1) {
+                this.writePSG = chipsConsumer.get(1)::writeRegister;
+logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.writePSG);
+            }
         }
 
         // Convert MmlDatum[] to byte array for Memory
@@ -44,10 +47,38 @@ public class MdsDriver extends MdsDrv implements IDriver {
             data[i] = (byte) srcBuf[i].dat;
         }
 
-        this.memory = new ByteArrayMemory(data);
+        // Check for RIFF header and extract Sequence Data
+        byte[] seqData = data;
+        if (data.length >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
+                data[8] == 'M' && data[9] == 'D' && data[10] == 'S' && data[11] == '0') {
+
+            int p = 12;
+            while (p < data.length - 8) {
+                // Read Chunk ID
+                if (data[p] == 's' && data[p + 1] == 'e' && data[p + 2] == 'q' && data[p + 3] == ' ') {
+                    // Found seq chunk
+                    int size = (data[p + 4] & 0xFF) | ((data[p + 5] & 0xFF) << 8) | ((data[p + 6] & 0xFF) << 16)
+                            | ((data[p + 7] & 0xFF) << 24);
+                    if (p + 8 + size <= data.length) {
+                        seqData = new byte[size];
+                        System.arraycopy(data, p + 8, seqData, 0, size);
+                        break; // Found it
+                    }
+                }
+                // Skip chunk
+                int size = (data[p + 4] & 0xFF) | ((data[p + 5] & 0xFF) << 8) | ((data[p + 6] & 0xFF) << 16)
+                        | ((data[p + 7] & 0xFF) << 24);
+                // Pad byte if size is odd (RIFF standard)
+                if ((size & 1) != 0)
+                    size++;
+                p += 8 + size;
+            }
+        }
+
+        this.memory = new ByteArrayMemory(seqData);
         this.workArea = new WorkArea();
 
-        int result = this.mds_init(workArea, memory, memory);
+        int result = this.mds_init(workArea, memory);
         if (result != 0) {
             logger.log(Level.ERROR, "MdsDrv init failed: " + result);
         } else {
@@ -60,37 +91,21 @@ public class MdsDriver extends MdsDrv implements IDriver {
 
     @Override
     public void startMusic(int musicNumber) {
-        // MdsDrv uses requests.
-        // Assuming musicNumber maps to a specific request ID or just starts the default
-        // song.
-        // As per mdsdrv.68k, triggering request 0 ($01) or 1 ($02)?
-        // work.w_request[0] = 0x2001; // Play command
         if (workArea != null) {
-            // Logic derived from mds_top or mds_request usage
-            // Request 0 is usually BGM.
-            // Command 0x01 (Play) with active flag (0x8000) -> 0x2001 (using simple mask)
-            // mds_request logic: d0 |= 0x8000 | 0x4000.
-            // Let's use the helper if possible, or direct access.
-            // mds_request(workArea, 1, 0); // 1 = Start?
-            // Let's assume standard Play = Request $01 on Track $00
-            workArea.w_request[0] = 0x2001;
+            logger.log(Level.DEBUG, "startMusic: " + musicNumber);
+            // Request 0 is BGM.
+            // mds_request handles setting rf_active (bit 15) and rf_stop (bit 14).
+            // Command is passed in d0 (musicNumber).
+            mds_request(workArea, musicNumber + 1, 0);
         }
     }
 
     @Override
     public void stopMusic() {
         if (workArea != null) {
-            // Stop command
-            // mds_request: Stop flag.
-            workArea.w_request[0] = 0x4000; // Stop bit?
-            // Or use mds_request(workArea, 0, 0) with stop bit logic.
-        }
-    }
-
-    @Override
-    public void render() {
-        if (workArea != null) {
-            mds_update(workArea);
+             // Request 0 is BGM.
+             // Command 0 with rf_stop (set by mds_request) should stop the track.
+             mds_request(workArea, 0, 0);
         }
     }
 
@@ -98,6 +113,7 @@ public class MdsDriver extends MdsDrv implements IDriver {
     @Override
     protected void write_fm_port0(int addr, int data) {
         if (writeOPNA != null) {
+//logger.log(Level.INFO, "%02X, %02X".formatted(addr, data));
             writeOPNA.accept(new ChipDatum(0, addr, data));
         }
     }
@@ -105,15 +121,7 @@ public class MdsDriver extends MdsDrv implements IDriver {
     @Override
     protected void write_fm_port1(int addr, int data) {
         if (writeOPNA != null) {
-            writeOPNA.accept(new ChipDatum(0, addr | 0x100, data)); // Port 1 usually +0x100 or special Handling?
-            // ChipDatum usually has port, address, data.
-            // If IDriver convention for Port1 is separate chip instance or address offset?
-            // MDSound YM2612: Part 1 is usually offset 2/3 but address space is 0-1ff.
-            // Port 0: 0x00-0xFF. Port 1: 0x100-0x1FF.
-            // We'll assume address should be offset by 0x100? No, write_fm_port1 input addr
-            // is usually raw 0x30..0xB4.
-            // Check MDSound implementation. Usually port 0 is addr, port 1 is addr | 0x100.
-            // Or use MdsDrv's raw writes: 4000/4001, 4002/4003.
+            writeOPNA.accept(new ChipDatum(1, addr, data));
         }
     }
 
@@ -124,9 +132,60 @@ public class MdsDriver extends MdsDrv implements IDriver {
         // For now, ignore.
     }
 
-    // Unimplemented methods required by IDriver interface (stubs)
     @Override
-    public void startRendering(int renderingFreq, Tuple<String, Integer>... chipMasterClocks) {
+    protected Memory getPsgMemory() {
+        return new PsgMemory(super.getPsgMemory());
+    }
+
+    private class PsgMemory implements Memory {
+        private final Memory wrapped;
+        
+        public PsgMemory(Memory wrapped) {
+            this.wrapped = wrapped;
+        }
+
+        @Override
+        public void write8(int addr, int data) {
+            if (addr == vavi.sound.mdsdrv.MdDef.sound_psg) {
+                if (writePSG != null) {
+//logger.log(Level.DEBUG, "write_psg: %02x, %02x".formatted(addr, data));
+                    writePSG.accept(new ChipDatum(0, 0, data)); // Port 0 assumed for PSG single port
+                }
+            } else {
+                wrapped.write8(addr, data);
+            }
+        }
+
+        // Delegation methods
+        @Override public int read8(int addr) { return wrapped.read8(addr); }
+        @Override public int read16(int addr) { return wrapped.read16(addr); }
+        @Override public int read32(int addr) { return wrapped.read32(addr); }
+        @Override public void write16(int addr, int data) { wrapped.write16(addr, data); }
+        @Override public void write32(int addr, int data) { wrapped.write32(addr, data); }
+        @Override public Memory add(int o) { return wrapped.add(o); }
+    }
+
+    private double samplesPerFrame = 735.0; // Default 44100 / 60
+    private double sampleCounter = 0.0;
+
+    @Override
+    @SafeVarargs
+    public final void startRendering(int renderingFreq, Tuple<String, Integer>... chipMasterClocks) {
+        if (renderingFreq <= 0) renderingFreq = 44100;
+        this.samplesPerFrame = (double) renderingFreq / 60.0; // Target 60Hz update rate
+        this.sampleCounter = 0.0;
+        logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted(renderingFreq, samplesPerFrame));
+    }
+
+    @Override
+    public void render() {
+        if (workArea != null) {
+            sampleCounter += 1.0;
+            if (sampleCounter >= samplesPerFrame) {
+                sampleCounter -= samplesPerFrame;
+                mds_update(workArea);
+            }
+        }
     }
 
     @Override
@@ -198,7 +257,7 @@ public class MdsDriver extends MdsDrv implements IDriver {
     }
 
     public GD3Tag getGD3TagInfo(byte[] srcBuf) {
-        return null;
+        return new GD3Tag();
     }
 
     // Helper Memory Implementation

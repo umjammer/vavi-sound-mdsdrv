@@ -9,15 +9,47 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import vavi.sound.mdsdrv.MdsDrv.WorkArea;
+import vavi.util.Debug;
+import vavi.util.properties.annotation.Property;
+import vavi.util.properties.annotation.PropsEntity;
 
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static vavi.sound.SoundUtil.volume;
+
+
+@PropsEntity(url = "file:local.properties")
 public class MdsPlayerTest {
+
+    static boolean localPropertiesExists() {
+        return Files.exists(Paths.get("local.properties"));
+    }
+
+    @Property(name = "vavi.test.volume")
+    double volume = 0.2;
+
+    @Property
+    String file = "src/test/resources/data/bgm/sand_light.mds";
+
+    static boolean onIde = System.getProperty("vavi.test", "").equals("ide");
+    static long time = onIde ? 1000 : 10;
+
+    @BeforeEach
+    void setup() throws Exception {
+        if (localPropertiesExists()) {
+            PropsEntity.Util.bind(this);
+        }
+
+        System.setProperty("mdplayer.volume", "%4.2f".formatted(volume));
+Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("mdplayer.volume") + ", cwd: " + System.getProperty("user.dir") + ", time: " + time);
+    }
 
     @Test
     public void testPlay() throws Exception {
-        Path mdsFile = Paths.get("data/bgm/sand_light.mds");
+        Path mdsFile = Paths.get(file);
         if (!Files.exists(mdsFile)) {
             System.out.println("MDS file not found: " + mdsFile.toAbsolutePath());
             return;
@@ -27,73 +59,163 @@ public class MdsPlayerTest {
 
         // Load MDS file into Memory
         byte[] mdsData = Files.readAllBytes(mdsFile);
+        System.out.println("MDS File size: " + mdsData.length);
+
+        // Check for RIFF header and extract Sequence Data
+        byte[] seqData = mdsData;
+        if (mdsData.length >= 12 && mdsData[0] == 'R' && mdsData[1] == 'I' && mdsData[2] == 'F' && mdsData[3] == 'F' &&
+                mdsData[8] == 'M' && mdsData[9] == 'D' && mdsData[10] == 'S' && mdsData[11] == '0') {
+
+            int p = 12;
+            while (p < mdsData.length - 8) {
+                // Read Chunk ID
+                if (mdsData[p] == 's' && mdsData[p + 1] == 'e' && mdsData[p + 2] == 'q' && mdsData[p + 3] == ' ') {
+                    // Found seq chunk
+                    int size = (mdsData[p + 4] & 0xFF) | ((mdsData[p + 5] & 0xFF) << 8) | ((mdsData[p + 6] & 0xFF) << 16)
+                            | ((mdsData[p + 7] & 0xFF) << 24);
+                    if (p + 8 + size <= mdsData.length) {
+                        seqData = new byte[size];
+                        System.arraycopy(mdsData, p + 8, seqData, 0, size);
+                        System.out.println("Extracted seq chunk: " + size + " bytes");
+                        break; // Found it
+                    }
+                }
+                // Skip chunk
+                int size = (mdsData[p + 4] & 0xFF) | ((mdsData[p + 5] & 0xFF) << 8) | ((mdsData[p + 6] & 0xFF) << 16)
+                        | ((mdsData[p + 7] & 0xFF) << 24);
+                // Pad byte if size is odd (RIFF standard)
+                if ((size & 1) != 0)
+                    size++;
+                p += 8 + size;
+            }
+        }
 
         // Create root memory
-        Memory mdsMem = new ByteArrayMemory(mdsData, 0);
+        Memory mdsMem = new ByteArrayMemory(seqData, 0);
+
+        // Initialize Chips
+        int sampleRate = 44100;
+        mdsound.chips.Ym2612 fm = new mdsound.chips.Ym2612();
+        mdsound.chips.Sn76489 psg = new mdsound.chips.Sn76489();
+        
+        // Clocks from MdsPlugin / standard
+        int fmClock = 7670454;
+        int psgClock = 3579545;
+        
+        fm.init(fmClock, sampleRate, 0); // interpolation 0
+        psg.start(sampleRate, psgClock);
+        psg.reset();
 
         // Driver with overriden IO
         MdsDrv driver = new MdsDrv() {
             @Override
             protected void write_fm_port0(int addr, int data) {
-                // Debug: System.out.printf("FM0: %02x %02x%n", addr, data);
+                // System.out.printf("FM0: %02x %02x%n", addr, data);
+                fm.write(0, addr);
+                fm.write(1, data);
             }
 
             @Override
             protected void write_fm_port1(int addr, int data) {
-                // Debug: System.out.printf("FM1: %02x %02x%n", addr, data);
+                // System.out.printf("FM1: %02x %02x%n", addr, data);
+                fm.write(2, addr);
+                fm.write(3, data);
             }
 
             @Override
             protected void writeIo(int port, int data) {
                 // Debug: System.out.printf("IO: %02x %02x%n", port, data);
             }
+
+            @Override
+            protected Memory getPsgMemory() {
+                final Memory wrapped = super.getPsgMemory();
+                return new Memory() {
+                    @Override public void write8(int addr, int data) {
+                        if (addr == 0xC00011) {
+                            // System.out.printf("PSG: %02x%n", data);
+                            psg.write(data);
+                        }
+                        else wrapped.write8(addr, data);
+                    }
+                    @Override public int read8(int addr) { return wrapped.read8(addr); }
+                    @Override public int read16(int addr) { return wrapped.read16(addr); }
+                    @Override public int read32(int addr) { return wrapped.read32(addr); }
+                    @Override public void write16(int addr, int data) { wrapped.write16(addr, data); }
+                    @Override public void write32(int addr, int data) { wrapped.write32(addr, data); }
+                    @Override public Memory add(int o) { return wrapped.add(o); }
+                };
+            }
         };
 
         WorkArea workArea = new WorkArea();
-        driver.mds_init(workArea, mdsMem, mdsMem);
+        driver.mds_top(workArea, mdsMem, null); // Initialize driver
+        
+        driver.mds_request(workArea, 1, 0); // Request song 1
 
-        // Trigger BGM0 or logical start
-        workArea.w_request[0] = 0x2001; // Example request
-
-        // Setup Audio
-        AudioFormat format = new AudioFormat(44100, 16, 2, true, false);
+        // Audio Output setup
+        int updateRate = 60; // 60Hz update (VBL)
+        int samplesPerStep = sampleRate / updateRate; 
+        int[][] fmBuf = new int[2][samplesPerStep];
+        int[][] psgBuf = new int[2][samplesPerStep];
+        byte[] mixBuf = new byte[samplesPerStep * 4]; // 16bit stereo
+        
+        AudioFormat format = new AudioFormat(sampleRate, 16, 2, true, false);
         SourceDataLine line = null;
         try {
             line = AudioSystem.getSourceDataLine(format);
             line.open(format);
+            volume(line, volume);
             line.start();
             System.out.println("Audio line started.");
         } catch (LineUnavailableException | IllegalArgumentException e) {
-            System.out.println(
-                    "Audio line unavailable (headless?), skipping audio output verification: " + e.getMessage());
+            System.out.println("Audio line unavailable: " + e.getMessage());
         }
 
-        long startTime = System.currentTimeMillis();
-        byte[] buf = new byte[4096]; // Silence buffer
-
-        // Run for 5 seconds
-        while (System.currentTimeMillis() - startTime < 5000) {
-            // Update Driver
+        System.out.println("Rendering audio...");
+        long start = System.currentTimeMillis();
+        
+        // Render loop (e.g. 10 seconds)
+        for (int frame = 0; frame < updateRate * time; frame++) {
             driver.mds_update(workArea);
-
-            // Wait / Sync (Simulate 60Hz)
-            try {
-                Thread.sleep(16);
-            } catch (InterruptedException e) {
-                break;
+            
+            // Clear buffers
+            mdsound.chips.Ym2612.clearBuffer(fmBuf, samplesPerStep);
+            for(int i=0; i<samplesPerStep; i++) {
+                 psgBuf[0][i] = 0;
+                 psgBuf[1][i] = 0;
             }
-
-            // Write silence to keep line active
+            
+            // Update Chips
+            fm.update(fmBuf, samplesPerStep);
+            psg.update(psgBuf, samplesPerStep);
+            
+            // Mix
+            for (int i = 0; i < samplesPerStep; i++) {
+                int L = fmBuf[0][i] + psgBuf[0][i];
+                int R = fmBuf[1][i] + psgBuf[1][i];
+                
+                // Clamp 16-bit
+                L = Math.max(-32768, Math.min(32767, L));
+                R = Math.max(-32768, Math.min(32767, R));
+                
+                mixBuf[i*4+0] = (byte)(L & 0xff);
+                mixBuf[i*4+1] = (byte)((L >> 8) & 0xff);
+                mixBuf[i*4+2] = (byte)(R & 0xff);
+                mixBuf[i*4+3] = (byte)((R >> 8) & 0xff);
+            }
+            
             if (line != null) {
-                line.write(buf, 0, buf.length);
+                line.write(mixBuf, 0, mixBuf.length);
             }
         }
-
+        
         if (line != null) {
             line.drain();
             line.close();
         }
-        System.out.println("Playback finished.");
+        
+        System.out.println("Render complete. Time: " + (System.currentTimeMillis() - start) + "ms");
     }
 
     // Helper class for Memory backed by byte array
@@ -144,8 +266,8 @@ public class MdsPlayerTest {
         }
 
         @Override
-        public Memory add(int o) {
-            return new ByteArrayMemory(data, offset + o);
+        public Memory add(int off) {
+            return new ByteArrayMemory(data, offset + off);
         }
     }
 }

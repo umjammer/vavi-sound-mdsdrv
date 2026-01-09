@@ -79,12 +79,11 @@ public class MdsDrvTest {
         header[7] = 0x00;
 
         MockMemory mem = new MockMemory(header);
-        MockMemory pcm = new MockMemory(new byte[100]);
 
         MdsDrv drv = new MdsDrv();
         MdsDrv.WorkArea work = new MdsDrv.WorkArea();
 
-        int res = drv.mds_init(work, mem, pcm);
+        int res = drv.mds_init(work, mem);
         assertEquals(0, res);
         assertNotNull(work.w_sdtop);
     }
