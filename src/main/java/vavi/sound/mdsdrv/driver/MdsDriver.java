@@ -49,25 +49,33 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
 
         // Check for RIFF header and extract Sequence Data
         byte[] seqData = data;
+        byte[] pcmData = null;
+        int seqOffset = 0;
         if (data.length >= 12 && data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
                 data[8] == 'M' && data[9] == 'D' && data[10] == 'S' && data[11] == '0') {
 
             int p = 12;
             while (p < data.length - 8) {
                 // Read Chunk ID
-                if (data[p] == 's' && data[p + 1] == 'e' && data[p + 2] == 'q' && data[p + 3] == ' ') {
-                    // Found seq chunk
-                    int size = (data[p + 4] & 0xFF) | ((data[p + 5] & 0xFF) << 8) | ((data[p + 6] & 0xFF) << 16)
-                            | ((data[p + 7] & 0xFF) << 24);
-                    if (p + 8 + size <= data.length) {
-                        seqData = new byte[size];
-                        System.arraycopy(data, p + 8, seqData, 0, size);
-                        break; // Found it
-                    }
-                }
-                // Skip chunk
+                char c0 = (char)data[p], c1 = (char)data[p+1], c2 = (char)data[p+2], c3 = (char)data[p+3];
+                String chunkId = "" + c0 + c1 + c2 + c3;
                 int size = (data[p + 4] & 0xFF) | ((data[p + 5] & 0xFF) << 8) | ((data[p + 6] & 0xFF) << 16)
                         | ((data[p + 7] & 0xFF) << 24);
+
+                // Read Chunk ID
+                if (data[p] == 's' && data[p + 1] == 'e' && data[p + 2] == 'q' && data[p + 3] == ' ') {
+                    // Found seq chunk
+                    seqOffset = p + 8;
+                    int remainingSize = data.length - seqOffset;
+                    seqData = new byte[remainingSize];
+                    System.arraycopy(data, seqOffset, seqData, 0, remainingSize);
+                } else if (data[p] == 'p' && data[p + 1] == 'c' && data[p + 2] == 'm' && data[p + 3] == ' ') {
+                    // Found pcm chunk
+                    if (p + 8 + size <= data.length) {
+                        pcmData = new byte[size];
+                        System.arraycopy(data, p + 8, pcmData, 0, size);
+                    }
+                }
                 // Pad byte if size is odd (RIFF standard)
                 if ((size & 1) != 0)
                     size++;
@@ -75,10 +83,11 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
             }
         }
 
-        this.memory = new ByteArrayMemory(seqData);
+        this.memory = new ByteArrayMemory(data, 0);
         this.workArea = new WorkArea();
 
-        int result = this.mds_init(workArea, memory);
+        Memory pcmMemory = pcmData != null ? new ByteArrayMemory(pcmData) : null;
+        int result = this.mds_init(workArea, memory, pcmMemory);
         if (result != 0) {
             logger.log(Level.ERROR, "MdsDrv init failed: " + result);
         } else {

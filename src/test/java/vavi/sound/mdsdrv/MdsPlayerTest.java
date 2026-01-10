@@ -93,7 +93,7 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                 p += 8 + size;
             }
             
-            }
+        }
 
         // Create root memory
         // Pass full RIFF file to driver (MdsDrv will parse chunks)
@@ -116,14 +116,44 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         MdsDrv driver = new MdsDrv() {
             @Override
             protected void write_fm_port0(int addr, int data) {
-                // System.out.printf("FM0: %02x %02x%n", addr, data);
+                // Log Panning (B4-B6)
+                if (addr >= 0xB4 && addr <= 0xB6) {
+                    System.err.printf("FM WR Pan: Reg=%02X Val=%02X%n", addr, data);
+                }
+                // Log DAC Mode (2B)
+                else if (addr == 0x2B) {
+                    System.err.printf("FM WR DAC Mode: Val=%02X%n", data);
+                }
+                // Log Ch2 TL (42, 46, 4A, 4E) - Bass
+                else if (addr == 0x42 || addr == 0x46 || addr == 0x4A || addr == 0x4E) {
+                     System.err.printf("FM WR Ch2 TL: Reg=%02X Val=%02X%n", addr, data);
+                }
+                // Log Ch5 TL (41+4, 45+4... -> 45, 49, 4D, 51 -> Wait Ch 5 is FM6)
+                // FM6 is Ch 2 on Port 1?
+                // MdsDrv writes to port 1 for Ch 3,4,5.
+                // Ch 5 (User Ch 6) is FM6.
+                // Registers 0x42, 0x46... on Port 1.
+                
+                else if (addr == 0x28) { // Key On
+                     int ch = data & 0x07;
+                     // Log for Ch 0, 1, 2, 5 (last one needs port check)
+                     System.err.printf("FM WR KeyOp: Val=%02X%n", data);
+                }
+                
                 fm.write(0, addr);
                 fm.write(1, data);
             }
 
             @Override
             protected void write_fm_port1(int addr, int data) {
-                // System.out.printf("FM1: %02x %02x%n", addr, data);
+                // Log Ch5 (FM6) TL: Regs 42, 46, 4A, 4E (Same as Ch2 but Port 1)
+                if (addr == 0x42 || addr == 0x46 || addr == 0x4A || addr == 0x4E) {
+                     System.err.printf("FM WR Ch5 TL: Reg=%02X Val=%02X%n", addr, data);
+                }
+                // Log Panning? B4-B6 on Port 1?
+                else if (addr >= 0xB4 && addr <= 0xB6) {
+                     System.err.printf("FM WR Pan (Port1): Reg=%02X Val=%02X%n", addr, data);
+                }
                 fm.write(2, addr);
                 fm.write(3, data);
             }

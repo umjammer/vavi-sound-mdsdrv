@@ -359,7 +359,7 @@ public class MdsSeqTest {
         
         WorkArea work = new WorkArea();
         TestMdsDrv testDriver = new TestMdsDrv();
-        testDriver.mds_init(work, mem);
+        testDriver.mds_init(work, mem, null);
         
         for (int id = 1; id <= 7; id++) {
             System.out.println("Testing BGM " + id);

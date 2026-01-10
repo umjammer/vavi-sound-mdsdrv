@@ -83,7 +83,7 @@ public class MdsDrvTest {
         MdsDrv drv = new MdsDrv();
         MdsDrv.WorkArea work = new MdsDrv.WorkArea();
 
-        int res = drv.mds_init(work, mem);
+        int res = drv.mds_init(work, mem, null);
         assertEquals(0, res);
         assertNotNull(work.w_sdtop);
     }

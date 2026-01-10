@@ -1,7 +1,7 @@
 package vavi.sound.mdsdrv;
 
 import java.lang.System.Logger;
-import java.util.Arrays;
+import java.lang.System;
 import java.util.HashMap;
 import java.util.Map;
 import java.lang.System.Logger.Level;
@@ -56,7 +56,8 @@ public class MdsDrv {
 
     // Assembly (mdsdrv.68k) does not force instrument load at init.
     // Removed nf_ins to prevent garbage loading for Raw Mode files.
-    public static final int nm_init = ((1 << nf_pan_lfo) | (1 << nf_enabled));
+    // Assembly (mdsdrv.inc line 106): nm_init = nf_ins | nf_pan_lfo | nf_enabled
+    public static final int nm_init = ((1 << nf_ins) | (1 << nf_pan_lfo) | (1 << nf_enabled));
     public static final int nm_restore = ((1 << nf_key_off) | (1 << nf_ins) | (1 << nf_vol) | (1 << nf_pan_lfo)
             | (1 << nf_fm3));
     public static final int cm_pause = ((1 << cf_suspend) | (1 << cf_stop));
@@ -120,6 +121,10 @@ public class MdsDrv {
         public int t_pcm_header;
         public int t_pcm_length;
         public int t_op_mask; // FM3 Special Mode mask
+        
+        // Debug: Note duration tracking
+        public int t_debug_note_frames;
+        public int t_debug_last_note;
     }
 
     public static class WorkArea {
@@ -144,7 +149,7 @@ public class MdsDrv {
 
         public int w_pcm_bank;
         public int w_pcm_mode;
-        // public int w_fm3_mask; // <-- Duplicate removed
+        public Memory w_pcm_ptr;  // PCM data pointer (Assembly: a2 in mds_init)
         
         public int w_pointer_mode; // 0=Standard (Header+4), 1=Raw (Header+0)
         public int w_fm3_alg;
@@ -165,7 +170,7 @@ public class MdsDrv {
     }
 
     public void mds_top(WorkArea a0, Memory a1, Memory a2) {
-        mds_init(a0, a1);
+        mds_init(a0, a1, a2);
         mds_update(a0);
         mds_request(a0, 0, 0);
         mds_command(a0, 0, 0, 0);
@@ -173,8 +178,12 @@ public class MdsDrv {
 
     public static final String version_str = "MDSDRV0.6 230612";
 
-    public int mds_init(WorkArea a0, Memory a1) {
-        // int d0;
+    /**
+     * Initialize driver with sequence data and PCM data.
+     * Assembly signature: mds_init(a0=work, a1=sdtop, a2=pcm_data)
+     */
+    public int mds_init(WorkArea a0, Memory a1, Memory a2) {
+        a0.w_pcm_ptr = a2;  // Store PCM pointer for mds_z80_init
         int d1;
 
         int magic = a1.read32(0);
@@ -189,7 +198,7 @@ public class MdsDrv {
              Memory seqData = parseRiffMds(a0, a1);
              if (seqData != null) {
                  a1 = seqData; // Use seq data base
-                 a0.w_pointer_mode = 1; // Treat as raw sequence data
+                 a0.w_pointer_mode = 1; // Raw mode for RIFF files
              } else {
                  // Fallback
                  a0.w_pointer_mode = 1;
@@ -248,11 +257,12 @@ public class MdsDrv {
 
         writeIo(MdDef.z80_bus_request, 0x100);
 
+        // Initialize PSG with silence (Assembly lines 114-117)
         Memory psg = getPsgMemory();
-        psg.write8(MdDef.sound_psg, 0x9f);
-        psg.write8(MdDef.sound_psg, 0xbf);
-        psg.write8(MdDef.sound_psg, 0xdf);
-        psg.write8(MdDef.sound_psg, 0xff);
+        psg.write8(MdDef.sound_psg, 0x9f); // Ch 0 Vol 15
+        psg.write8(MdDef.sound_psg, 0xbf); // Ch 1 Vol 15
+        psg.write8(MdDef.sound_psg, 0xdf); // Ch 2 Vol 15
+        psg.write8(MdDef.sound_psg, 0xff); // Ch 3 Vol 15
 
         // Initialize FM LFO and DAC enable registers
         // Reg $22 = LFO control (0x00 = off, 0x08 = on with default freq)
@@ -285,7 +295,19 @@ public class MdsDrv {
     }
 
     private void mds_z80_init(WorkArea a0) {
-        a0.w_pcm_bank = 0;
+        // Assembly (lines 3144-3149):
+        //   move.l  a2,d0
+        //   add.l   d0,d0
+        //   swap    d0
+        //   move.b  d0,w_pcm_bank(a0)
+        // This extracts bits 16-23 of (pcm_ptr * 2) as the bank offset
+        if (a0.w_pcm_ptr != null) {
+            // Note: In Java we don't have a memory address value, but this would be
+            // the absolute address shifted. For software emulation, bank is typically 0.
+            a0.w_pcm_bank = 0;  // Default bank for emulation (no hardware bank switching)
+        } else {
+            a0.w_pcm_bank = 0;
+        }
         a0.w_pcm_mode = 2;
 
         try {
@@ -620,29 +642,26 @@ public class MdsDrv {
     }
 
     public void mds_update(WorkArea a0) {
-        for (int rnum = RCOUNT - 1; rnum >= 0; rnum--) {
+        for (int rnum = 0; rnum < RCOUNT; rnum++) {
             int reqdata = a0.w_request[rnum];
             if ((reqdata & (1 << 15)) != 0) {
                 mds_handle_request(a0, rnum, reqdata);
             }
             reqdata = a0.w_tmask[rnum];
             if (reqdata != 0) {
-                int counter = a0.w_counter[rnum];
-                counter += a0.w_tempo[rnum];
+                // Assembly uses 16-bit word operations - mask to match
+                int counter = a0.w_counter[rnum] & 0xffff;
+                counter += a0.w_tempo[rnum] & 0xffff;  // w_tempo is unsigned 16-bit
                 counter++;
-                int gtempo = a0.w_gtempo;
+                counter &= 0xffff;  // Keep as 16-bit word
+                int gtempo = a0.w_gtempo & 0xffff;
                 int seq_step = 0;
                 while (counter >= gtempo) {
                     counter -= gtempo;
                     seq_step++;
                 }
                 a0.w_seq_step[rnum] = seq_step;
-                a0.w_counter[rnum] = counter;
-
-                if (rnum == 0 && seq_step > 0) {
-//                    System.out.printf("Update R0: Tempo=%d, GTempo=%d, Counter=%d, SeqStep=%d%n", 
-//                        a0.w_tempo[rnum], gtempo, counter, seq_step);
-                }
+                a0.w_counter[rnum] = counter & 0xffff;
             }
         }
 
@@ -653,7 +672,7 @@ public class MdsDrv {
                 mds_update_fade(a0);
         }
 
-        for (int tnum = TCOUNT - 1; tnum >= 0; tnum--) {
+        for (int tnum = 0; tnum < TCOUNT; tnum++) {
             TrackData twork = a0.w_track[tnum];
             int flag = twork.t_note_flag;
 
@@ -667,6 +686,18 @@ public class MdsDrv {
             int real_rnum = rnum / 2;
             int seq_step = a0.w_seq_step[real_rnum];
 
+            // Debug: track when seq_step is 0 (would prevent counter decrement)
+            if (seq_step == 0 && twork.t_counter > 0 && twork.t_channel_id >= 8) {
+                // Debug for PSG channels (channel_id 8, 9, 10, 11)
+                // System.out.printf("SEQ_STEP_ZERO: ch=%d rnum=%d counter=%d%n", 
+                //     twork.t_channel_id, real_rnum, twork.t_counter);
+            }
+
+            // Assembly (line 546): dbra d5,mds_update_seq
+            // dbra: decrement d5, if d5 != -1 branch to label
+            // So d5=0 -> decrement to -1 -> don't branch (0 calls)
+            // d5=1 -> decrement to 0, branch (1 call), decrement to -1, don't branch
+            // Therefore d5=N means exactly N calls, matching `i < seq_step`
             for (int i = 0; i < seq_step; i++) {
                 mds_update_seq(a0, twork);
             }
@@ -752,7 +783,10 @@ public class MdsDrv {
         header = header.add(1);
         if (vol > 127)
             vol = 127;
-        a0.w_volume[rnum] = (vol << 8) | (reqdata & 0xff);
+        // a0.w_volume[rnum] = (vol << 8) | (reqdata & 0xff);
+        // Fix: Do not add Song Index (reqdata) to Volume. User log expects pure volume.
+        a0.w_volume[rnum] = (vol << 8);
+        // System.out.printf("mds_request: rnum=%d reqdata=%d vol=%d w_volume=%04x%n", rnum, reqdata, vol, a0.w_volume[rnum]);
 
         int tcount = header.read8(0);
         header = header.add(1);
@@ -761,12 +795,15 @@ public class MdsDrv {
         int songBase = headerOffset + songBaseOffset;
         
         int tracksFound = 0;
-        for (int tnum = TCOUNT - 1; tnum >= 0 && tracksFound < tcount; tnum--) {
+        
+        for (int tnum = 0; tnum < TCOUNT && tracksFound < tcount; tnum++) {
             TrackData t = a0.w_track[tnum];
             // Check if track is free (not enabled AND not suspended)
             if ((t.t_note_flag & (1 << nf_enabled)) != 0 || (t.t_channel_flag & (1 << cf_suspend)) != 0) {
                 continue;
             }
+            
+
 
             // Track base is the song base (used for relative addressing in sequence commands)
             t.t_base_addr = songBase;
@@ -808,17 +845,32 @@ public class MdsDrv {
             
             // Stack and timing
             t.t_stack_pos = 0;
+            t.t_counter = 0; // Initialize counter to 0 to ensure immediate start on first seq_step
+            t.t_rest_time = 0x0b;
+            
+            // Assembly: move.w #$0b0b,t_rest_time(twork)
+            // It writes 0b0b to t_rest_time.
+            // If t_rest_time is a word (or adjacent fields), this might init something else.
+            // Struct def: t_rest_time (byte/word), t_stack_pos (byte).
+            // In Java, fields are separate.
+            // Explicit init is safer.
+            t.t_stack_pos = 0;
             t.t_counter = 0;
             t.t_rest_time = 0x0b;  // Default rest time
             t.t_note_time = 0x0b;  // Default note time
             
-            // PSG/FM specific init
+            // PSG/FM specific init (Assembly lines 815-834)
             if (chnid >= ct_psg) {
+                // PSG initialize (Assembly lines 821-823)
+                // move.w @zero,t_psg_nreset(twork)        ; noise mode = 0
+                // move.l #$fff8ff0f,t_psg_eg_addr(twork)  ; eg_addr=$fff8, eg_pos=$ff, eg_delay=$0f
                 t.t_psg_nreset = 0;
                 t.t_psg_nmode = 0;
-                t.t_psg_eg_addr = 0xfff8;
-                t.t_psg_eg_pos = 0xff;
-                t.t_psg_eg_delay = 0x0f;
+                t.t_psg_eg_addr = 0xfff8;  // Invalid address = no envelope until instrument loaded
+                t.t_psg_env_data = null;   // No dummy envelope - use instrument data via E1 command
+                t.t_psg_eg_pos = 0xff;     // 0xff = envelope disabled
+                t.t_psg_eg_delay = 0x0f;   // Volume silence (15 = silent on PSG)
+                t.t_last_pitch = 0xffff;   // Force pitch update on first note
             } else {
                 t.t_fm_pan_lfo = 0xc0;  // Default panning (both L+R)
                 t.t_fm_alg = 0;
@@ -854,9 +906,151 @@ public class MdsDrv {
     }
 
     private void mds_update_priority(WorkArea a0) {
-        // Priority update logic (Simplified)
-        // Checks requests and updates track priority flags if needed
         a0.w_priority = 0;
+        
+        for (int tnum = 0; tnum < TCOUNT; tnum++) {
+            TrackData twork = a0.w_track[tnum];
+            int flag = twork.t_note_flag;
+            
+            // Check suspension (Assembly lines 886-887)
+            if ((twork.t_channel_flag & (1 << cf_suspend)) != 0) {
+                 // Suspended: continue to checks
+            } else {
+                 // Not suspended: check enabled
+                 if ((flag & (1 << nf_enabled)) == 0) {
+                     continue; // voice not enabled
+                 }
+            }
+            
+            // Check Priority (Assembly lines 890-907)
+            int chnid = twork.t_channel_id;
+            int reqId = twork.t_request_id;
+            boolean hasPriority = true;
+            
+            // Iterate requests RCOUNT-1 down to 0
+            // Logic: check all requests *before* the current one?
+            // Assembly logic:
+            //   start with current request offset? 
+            //   No, it scans `w_chmask` array.
+            //   Wait, assembly uses `rept RCOUNT-1`.
+            //   It checks if ANY request has this channel bit set?
+            //   Actually it checks logic to find if *higher priority* requests have this channel.
+            //   Requests are 0..3. Lower index = Higher Priority?
+            //   No, `mds_handle_request` says:
+            //   `d1` request priority. stored in `w_request`.
+            //   Wait. `w_chmask` is per-request.
+            //   Assembly logic:
+            //   d0 = t_request_id (e.g. 0, 2, 4, 6)
+            //   tmpa0 = w_chmask
+            //   Loop 3 times (RCOUNT-1):
+            //     Check if `w_chmask` entry matches `d0`?
+            //     Assembly:
+            //       beq.s @has_priority (if d0 == current checked request?)
+            //       move.w (tmpa0)+,d1 (read mask)
+            //       btst chnid,d1 (is channel in this mask?)
+            //       bne.s @no_priority (if so, someone else has it)
+            //       subq.b #2,d0 (decrement request ID we are looking for?)
+            //   
+            //   Wait. `d0` is `t_request_id`.
+            //   If `d0` is 6 (Request 3).
+            //   It checks masks for Request 0, 1, 2.
+            //   If any of them have `chnid` set, then `no_priority`.
+            //   
+            //   Assembly loop is unrolled or structured to check *other* requests.
+            //   Actually `tmpa0` points to `w_chmask` (start).
+            //   `d0` is current track's request ID.
+            //   Code:
+            //     beq.s @has_priority
+            //     move.w (tmpa0)+,d1
+            //     btst chnid,d1
+            //     bne.s @no_priority
+            //     subq.b #2,d0
+            //   
+            //   It subtracts 2 from d0 each time.
+            //   If d0 reaches 0 (beq), it means we reached our own request ID?
+            //   So it checks requests *below* our ID.
+            //   If `d0` (req ID) is 0. `beq` immediately. Has priority.
+            //   If `d0` is 2. Checks Req 0. (d0!=0). Reads Req 0 mask. If set -> no priority. Sub 2 -> d0=0. Next loop beq -> has priority.
+            //
+            //   So it checks all request slots logically *before* the current one.
+            //   Since `w_chmask` is array at `tmpa0`, and it increments `tmpa0`.
+            //   It checks `w_chmask[0]`, `w_chmask[1]`, etc.
+            //   So if I am Request 2. It checks Request 0.
+            //   If Request 0 has my channel, I lose.
+            //   So **Lower Request Index = Higher Priority**.
+            
+            int currentReqIdx = reqId / 2;
+            
+            // Check if track was stopped (reqId >= RCOUNT*2)
+            if (currentReqIdx >= RCOUNT) {
+                 // Logic lines 904-907: if reqId >= 8, checks remaining masks?
+                 // Assembly: beq @has_priority branches if d0==0.
+                 // If d0 start was >= 8, it subtracts 2 three times -> d0 >= 2.
+                 // It never branches to @has_priority inside loop.
+                 // After loop: beq @has_priority. (If d0 was 6 initially, now 0).
+                 // If d0 was 8 (stopped). Now 2. Not equal.
+                 // move.w (tmpa0)+, d1. (Checks last mask? Req 3?).
+                 // btst chnid,d1.
+                 // So if stopped, it basically checks ALL masks.
+                 // Java: check all masks < currentReqIdx.
+                 // If stopped (eq "no owner"), check all masks 0..3.
+                 currentReqIdx = RCOUNT; // Effectively check all
+            }
+
+            for (int r = 0; r < currentReqIdx; r++) {
+                if (((a0.w_chmask[r] >> chnid) & 1) != 0) {
+                    hasPriority = false;
+                    break;
+                }
+            }
+            
+            if (!hasPriority) {
+                // @no_priority
+                twork.t_last_pitch = 0xffff; // st t_last_pitch
+                twork.t_note_flag |= (nm_restore << nf) | (1 << (cf + cf_background));
+                // Note: Java uses separate int fields.
+                // nm_restore = keys off, ins, vol, pan, fm3
+                twork.t_note_flag |= nm_restore;
+                twork.t_channel_flag |= (1 << cf_background);
+                
+                // Mask out key on if pending?
+                // Assembly: @always_mask: bclr #nf_key_on
+                // But @no_priority flows to @always_mask ONLY if skipping the "has priority" block?
+                // No, @no_priority label is at end.
+                // Wait.
+                // 926: @no_priority
+                // 927: st t_last_pitch
+                // 928: ori.w ...
+                // 930: @voice_not_enabled
+                
+                // So if NO priority: set background, restore flags, skip masking check.
+                continue; 
+            }
+            
+            // @has_priority
+            // Clear background flag (line 909) - bclr returns Z=1 if bit WAS 0
+            boolean wasInBackground = (twork.t_channel_flag & (1 << cf_background)) != 0;
+            twork.t_channel_flag &= ~(1 << cf_background);
+            
+            // Assembly line 910: beq.s @voice_not_enabled - skip masking if NOT from background
+            if (!wasInBackground) {
+                continue;
+            }
+            
+            if ((flag & (1 << nf_enabled)) == 0) {
+                continue;
+            }
+            
+            // Masking check for Drums or Short Duration (lines 915-924)
+            // Only runs when track transitions from background to foreground
+            if ((twork.t_channel_flag & (1 << cf_drum_mode)) != 0) {
+                 twork.t_note_flag &= ~(1 << nf_key_on);  // Drum: always mask
+            } else {
+                 if ((twork.t_counter & 0xff) < 5) {
+                      twork.t_note_flag &= ~(1 << nf_key_on);  // Short duration: mask
+                 }
+            }
+        }
     }
 
     private void mds_update_fade(WorkArea a0) {
@@ -887,6 +1081,8 @@ public class MdsDrv {
     private final int mds_chn_cmd_base = 0xE0;
     private final int mds_note_start = 0x82;
 
+    private static int debugCounter = 0;
+
     private void mds_update_seq(WorkArea a0, TrackData twork) {
         // Assembly (lines 1005-1011): subq.b #1,t_counter; bcs.s @read_command
         // bcs branches if result underflowed (carry set when decrementing from 0)
@@ -908,9 +1104,16 @@ public class MdsDrv {
         while (true) {
             int pos = twork.t_position;
             int cmd = tbase.read8(pos) & 0xFF;
+
             int cmdlen = 1;
 
             twork.t_position = pos + cmdlen;  // Default advance by 1
+            
+
+            
+            // ... (rest of method) we need to be careful with replace_file_content scope.
+            // I'll target just the start.
+
 
             // Assembly (lines 1025-1054): Check command ranges
             if ((cmd & 0x80) == 0) {
@@ -925,9 +1128,23 @@ public class MdsDrv {
 
             if (cmd >= mds_chn_cmd_base) {
                 // E0-FF: Commands
+                // Save counter before command to detect if command set it
+                int counterBefore = twork.t_counter & 0xff;  // Should be 255 from underflow
                 int len = execute_command(a0, twork, tbase, pos, cmd);
                 if (len != 0) {
                     twork.t_position = pos + len;
+                } else {
+                    // Command returned 0 (updated position itself)
+                    // Check if command set counter (changed from 255)
+                    int counterAfter = twork.t_counter & 0xff;
+                    if (counterAfter != counterBefore && counterAfter != 255) {
+                        // Counter was actually set by command (like F7 drum finish)
+                        if (twork.t_mtab_addr != 0) {
+                            mds_update_mtab(a0, twork);
+                        }
+                        return;
+                    }
+                    // Command didn't set counter (FA, FE, FF) - continue processing
                 }
                 if (twork.t_request_id >= RCOUNT * 2) {
                     return;  // Track stopped
@@ -943,20 +1160,25 @@ public class MdsDrv {
 
                 boolean isSlur = (twork.t_note_flag & (1 << nf_slur)) != 0;
                 if (!isSlur) {
-                    if ((twork.t_channel_flag & (1 << cf_mtab_carry)) == 0) {
+                    // Assembly (lines 1064-1066): beq.s @cmd_note_noreset (branch if flag CLEAR)
+                    // Meaning: if cf_mtab_carry IS SET, reset mtab_delay
+                    if ((twork.t_channel_flag & (1 << cf_mtab_carry)) != 0) {
                         twork.t_mtab_delay = 0;
                     }
                     twork.t_note_flag |= (1 << nf_key_off);
                 }
 
-                // Assembly (lines 1069-1070): Check drum mode
+                // Assembly (lines 1069-1070, 1112-1119): Check drum mode
                 if ((twork.t_channel_flag & (1 << cf_drum_mode)) != 0) {
                     // Drum mode: push return address and jump to subroutine
-                    twork.t_stack[sp] = pos + 1;  // Return after note byte
-                    twork.t_stack_pos = sp + 1;
+                    // Assembly uses t_stack_pos as BYTE offset (increments by 2 for word)
+                    // t_stack(twork,@sp) where @sp is byte offset
+                    // We simulate by using sp/2 as array index
+                    int stackIdx = sp / 2;
+                    twork.t_stack[stackIdx] = pos + 1;  // Return after note byte
+                    twork.t_stack_pos = sp + 2;         // Assembly: addq.b #2,@sp
                     // Jump to subroutine table: note * 2 -> read 16-bit offset
-                    int subOffset = tbase.read16(note * 2);
-                    if ((subOffset & 0x8000) != 0) subOffset |= 0xFFFF0000;
+                    int subOffset = tbase.read16(note * 2) & 0xffff;
                     twork.t_position = subOffset;
                     continue;  // Process subroutine commands
                 }
@@ -1114,6 +1336,10 @@ public class MdsDrv {
                 return 1;
             case 0xE1: // Ins
                 twork.t_ins = tbase.read8(pos + 1) & 0xff;
+                // System.out.println("CMD E1 (Ins): " + twork.t_ins + " Ch: " + twork.t_channel_id);
+                
+               // System.out.println("CMD E1 (Ins): " + twork.t_ins + " Ch: " + twork.t_channel_id);
+                
                 twork.t_note_flag |= (1 << nf_key_off);
                 twork.t_channel_flag &= ~(1 << cf_pcm_control);
                 twork.t_note_flag |= (1 << nf_ins);
@@ -1153,17 +1379,21 @@ public class MdsDrv {
                      if (a0.globInstruments != null && a0.globInstruments.containsKey(twork.t_ins)) {
                          twork.t_psg_env_data = insData;
                          twork.t_psg_eg_addr = 0; // Use data from offset 0
+                    //     System.out.println("  -> Loaded PSG from GLOB");
                      } else if (a0.w_sdtop != null) {
                         twork.t_psg_env_data = null; // Use sdtop
                         int insIdx = twork.t_ins;
                         int ptrOffset = tbase.read16(insIdx * 2);
                         if ((ptrOffset & 0x8000) != 0) ptrOffset |= 0xFFFF0000;
                         twork.t_psg_eg_addr = ptrOffset;
+                    //    System.out.println("  -> Loaded PSG from Pointer: " + ptrOffset);
                     }
                     twork.t_psg_eg_pos = 0xff;
                     twork.t_psg_eg_delay = 0x0f;
                     twork.t_note_flag |= (1 << nf_key_off);
                     twork.t_note_flag &= ~(1 << nf_slur);
+                } else {
+                 //   System.out.println("  -> Instrument NOT FOUND!");
                 }
                 return 2;
             case 0xE2: // Vol
@@ -1203,12 +1433,22 @@ public class MdsDrv {
                     twork.t_note_flag |= (1 << nf_pan_lfo);
                 }
                 return 2;
-            case 0xEA: // LFO
+            case 0xEA: // LFO / Noise Mode
+                // Assembly (lines 1321-1344): cmd_lfo / cmd_nmode
+                // For FM (ch < 6): set LFO sensitivity
+                // For PSG (ch >= 6): set noise mode
                 if (twork.t_channel_id < 6) {
+                    // FM LFO
                     int lfo = twork.t_fm_pan_lfo & 0xc0;
                     lfo |= tbase.read8(pos + 1) & 0xff;
                     twork.t_fm_pan_lfo = lfo;
                     twork.t_note_flag |= (1 << nf_pan_lfo);
+                } else {
+                    // PSG Noise Mode (Assembly @cmd_nmode)
+                    // 00 = use key code, e3 = periodic noise, e7 = white noise
+                    twork.t_last_pitch = 0xffff;  // st t_last_pitch = set to $FFFF
+                    twork.t_psg_nmode = tbase.read8(pos + 1) & 0xff;
+                    twork.t_note_flag |= (1 << nf_nmode);
                 }
                 return 2;
             case 0xEB: // Macro Table
@@ -1301,122 +1541,139 @@ public class MdsDrv {
             case 0xF8: // Comm
                 a0.w_comm = tbase.read8(pos + 1);
                 return 2;
-            case 0xFA: // Loop
-                int slot = twork.t_stack_pos;
-                if (slot < TSTACK_COUNT - 2) {
-                    twork.t_stack[slot] = 0xff; // Marker
-                    twork.t_stack[slot + 1] = pos + 4; // Return address
-                    twork.t_stack_pos += 2;
-                }
-                return 4;
-            case 0xFB: // Loop Finish
+            case 0xFA: // Loop Start
+                // Assembly (lines 1482-1486):
+                // move.b #$ff,t_stack(twork,@sp)
+                // move.w @trackpos,2+t_stack(twork,@sp)  ; @trackpos already advanced by 1
+                // addq.b #4,@sp
+                // Command length table shows FA is 1 byte
                 {
-                    int sp = twork.t_stack_pos - 2;
-                    if (sp < 0) return 1; // Stack underflow protection
-
-                    int counter = twork.t_stack[sp];
+                    int sp = twork.t_stack_pos;
+                    int idx = sp / 2;
+                    twork.t_stack[idx] = 0xff;        // Marker at sp
+                    twork.t_stack[idx + 1] = pos + 1; // Return address = after FA (loop body start)
+                    twork.t_stack_pos = sp + 4;       // Push 4 bytes
+                }
+                return 1;  // FA is 1-byte command
+            case 0xFB: // Loop Finish
+                // Assembly (lines 1491-1505):
+                // subq.b #4,@sp; move.b t_stack(twork,@sp),@tempreg; ...
+                // if not done: addq.b #4,@sp
+                {
+                    int sp = twork.t_stack_pos - 4;  // Peek at loop frame
+                    if (sp < 0) return 1;            // Stack underflow protection
+                    
+                    int idx = sp / 2;
+                    int counter = twork.t_stack[idx];
                     if (counter == 0xff) {
-                        // First time reaching end: init counter
+                        // First time: read loop count from data
                         counter = tbase.read8(pos + 1) & 0xff;
-                        twork.t_stack[sp] = counter;
-                        // Consume loop count byte immediately? 
-                        // Assembly: move.b 0(@tbase,@trackpos),@tempreg (if marker found)
                     }
-
-                    if (counter > 1) {
-                        twork.t_stack[sp] = counter - 1;
-                        twork.t_position = twork.t_stack[sp + 1]; // Jump back
-                        return 0; // Pos updated
+                    
+                    counter--;
+                    if (counter > 0) {
+                        twork.t_stack[idx] = counter;
+                        twork.t_position = twork.t_stack[idx + 1]; // Return to loop start
+                        // sp stays unchanged (we peeked but didn't pop)
+                        return 0;
                     } else {
-                        // Loop done
-                        twork.t_stack_pos -= 2; // Pop
-                        // If we just initialized counter (read byte), we need to skip it
-                        // The command is FB xx. length 2.
+                        // Loop done - pop frame
+                        twork.t_stack_pos = sp;  // Pop 4 bytes
                         return 2;
                     }
                 }
-            case 0xFC: // Loop Break (1 byte offset?)
-            case 0xFD: // Loop Break (Long? 2 byte?)
-                // Assembly FC: lpb (1 byte len check?)
-                // Assembly: cmpi.b #1,t_stack-4 (counter). if 1, pop and jump.
+            case 0xFC: // Loop Break
+            case 0xFD: // Loop Break (Long)
+                // Assembly (lines 1510-1517, 1522-1525):
+                // cmpi.b #1,t_stack-4(twork,@sp); bne @next
+                // subq.b #4,@sp; read offset
                 {
-                    int sp = twork.t_stack_pos - 2;
-                    if (sp >= 0 && twork.t_stack[sp] == 1) {
-                        twork.t_stack_pos -= 2; // Pop
-                        int breakOffset = tbase.read8(pos + 1) & 0xff;
-                        twork.t_position = pos + 2 + breakOffset; // Jump
-                        return 0;
+                    int sp = twork.t_stack_pos - 4;
+                    if (sp >= 0) {
+                        int idx = sp / 2;
+                        if (twork.t_stack[idx] == 1) {
+                            // Last iteration: break out
+                            twork.t_stack_pos = sp;  // Pop 4 bytes
+                            if (cmd == 0xFC) {
+                                int offset = tbase.read8(pos + 1) & 0xff;
+                                twork.t_position = pos + 2 + offset;
+                            } else { // 0xFD - long offset
+                                // Assembly adds offset to cmdlen(3), then @next_command adds to trackpos
+                                // Final read is from trackpos-1, so position = FD + 3 + offset
+                                int offset = tbase.read16(pos + 1);
+                                if ((offset & 0x8000) != 0) offset |= 0xFFFF0000;
+                                twork.t_position = pos + 3 + offset;
+                            }
+                            return 0;
+                        }
                     }
-                    return 2; // Skip break offset
+                    return (cmd == 0xFC) ? 2 : 3; // Skip offset bytes
                 }
             case 0xFE: // Pattern / Subroutine
+                // Assembly flow:
+                // 1. At cmd entry, trackpos was incremented by prev cmdlen
+                // 2. addq.w #2,@trackpos -> push this to stack
+                // 3. After FF pop, reads from trackpos-1
+                // Java flow:
+                // 1. Read from pos directly (no -1)
+                // 2. So we push pos+2 which is where we want to read after return
                 {
-                     int subIdx = tbase.read8(pos) & 0xff; // Wait, FE is cmd.
-                     // FE nn. Read nn.
-                     // Assembly: move.b -2(@tbase,@trackpos) -> fetches param?
-                     // No, FE is 1 byte command?
-                     // 1545: move.b -2(@tbase,@trackpos),@cmd
-                     // This implies previous command byte or something?
-                     // Actually @trackpos was inc by 2.
-                     // It likely means FE is followed by byte index.
-                     // Let's assume FE nn.
-                     int patIdx = tbase.read8(pos + 1) & 0xff;
-                     
-                     // Push return address (pos + 2)
-                     int sp = twork.t_stack_pos;
-                     if (sp < TSTACK_COUNT - 1) {
-                         twork.t_stack[sp] = twork.t_position + 2; // Return address
-                         // twork.t_stack[sp+1] unused or used for something else?
-                         // 68k: pushes 1 word (addr).
-                         // We use stack for loops (2 words) and subs (1 word?).
-                         // This mixes stack usage.
-                         // Cmd_finish checks sp != 0.
-                         // Let's use 1 slot for return address.
-                         twork.t_stack_pos++;
-                     }
-                     
-                     // Jump to pattern
-                     // table lookup?
-                     // 1546: add.w @cmd,@cmd; move.w 0(@tbase,@cmd),@trackpos
-                     // This implies PATTERN TABLE at start of track data?
-                     // Or global? "tbase" is track base.
-                     // Does track header have pattern table?
-                     // This FE command seems rare or specific to certain driver configs.
-                     // For safety, generic "return 2" might be safer unless needed.
-                     // But user said "no lacking code".
-                     // Let's implement stub warning or assume pointer mode?
-                     return 2;
+                    int sp = twork.t_stack_pos;
+                    int idx = sp / 2;
+                    twork.t_stack[idx] = pos + 2;  // Return reads from here directly
+                    twork.t_stack_pos = sp + 2;    // Push 2 bytes
+                    
+                    // Read pattern index and lookup in pattern table
+                    int patIdx = tbase.read8(pos + 1) & 0xff;
+                    int patOffset = tbase.read16(patIdx * 2) & 0xffff;
+                    twork.t_position = patOffset;
+                    return 0;  // Position updated
                 }
             case 0xF7: // Drum Finish
-                // Assembly (lines 1553-1557):
+                // Assembly (lines 1553-1557): @cmd_dmfinish
                 // move.b 0(@tbase,@trackpos),t_note(twork)
                 // subq.b #2,@sp
                 // move.w t_stack(twork,@sp),@trackpos
                 // bra.w @cmd_tie
+                // NOTE: Assembly does NOT set nf_key_on here - it was already set
+                // when the drum note command was processed.
                 twork.t_note = tbase.read8(pos + 1) & 0xff;
-                twork.t_note_flag |= (1 << nf_key_on);
-                if (twork.t_stack_pos > 0) {
-                    twork.t_stack_pos--;
-                    int returnPos = twork.t_stack[twork.t_stack_pos];
+                if (twork.t_stack_pos >= 2) {
+                    // Assembly: subq.b #2,@sp; move.w t_stack(twork,@sp)
+                    twork.t_stack_pos -= 2;
+                    int stackIdx = twork.t_stack_pos / 2;
+                    int returnPos = twork.t_stack[stackIdx];
                     // Now process as tie - read length
                     int lenCmd = tbase.read8(returnPos) & 0xff;
                     if ((lenCmd & 0x80) != 0) {
                         twork.t_counter = twork.t_note_time;
                         twork.t_position = returnPos;
+                        // Debug: check for counter=255
+                        // if (twork.t_counter >= 0x80) {
+                        //     System.out.printf("F7_COUNTER_HIGH: Ch%d counter=%d note_time=%d returnPos=%d lenCmd=0x%02x%n",
+                        //         twork.t_channel_id, twork.t_counter, twork.t_note_time, returnPos, lenCmd);
+                        // }
                     } else {
                         twork.t_counter = lenCmd;
                         twork.t_note_time = lenCmd;
                         twork.t_position = returnPos + 1;
+                        // Debug: check for high lenCmd
+                        // if (lenCmd >= 0x40) {
+                        //     System.out.printf("F7_LENCMD_HIGH: Ch%d lenCmd=0x%02x returnPos=%d%n",
+                        //         twork.t_channel_id, lenCmd, returnPos);
+                        // }
                     }
                 }
                 return 0;
             case 0xF3: // Finish (Alt)
             case 0xF4: // Finish (Alt)
             case 0xFF: // Finish / Return
-                if (twork.t_stack_pos > 0) {
+                if (twork.t_stack_pos >= 2) {
                     // Return from subroutine (lines 1182-1186)
-                    twork.t_stack_pos--;
-                    twork.t_position = twork.t_stack[twork.t_stack_pos];
+                    // Assembly: subq.b #2,@sp; move.w t_stack(twork,@sp),@trackpos
+                    twork.t_stack_pos -= 2;
+                    int stackIdx = twork.t_stack_pos / 2;
+                    twork.t_position = twork.t_stack[stackIdx];
                     return 0;
                 }
                 stop_track(twork);
@@ -1660,31 +1917,48 @@ public class MdsDrv {
     private void mds_psg_update(WorkArea a0, TrackData t, int chVal) {
         mds_psg_update_env(a0, t, chVal);
         int pitch = mds_pitch_update(a0, t);
+        
+        // Debug: Track note duration (disabled)
+        // int currentNote = t.t_note;
+        // if (currentNote == t.t_debug_last_note) {
+        //     t.t_debug_note_frames++;
+        //     if (t.t_debug_note_frames == 31) {
+        //         System.out.printf("LONG_NOTE: Ch%d Note=%d held for >30 frames, counter=%d, position=%d%n",
+        //             t.t_channel_id, currentNote, t.t_counter, t.t_position);
+        //     }
+        // } else {
+        //     t.t_debug_last_note = currentNote;
+        //     t.t_debug_note_frames = 1;
+        // }
+        
         if (pitch != t.t_last_pitch) {
             t.t_last_pitch = pitch;
             int psgPitch = mds_get_psg_pitch(t, pitch);
 
+            // Assembly (lines 2910-2916):
+            // moveq #$0f,d1 -> and.b d0,d1 -> or.b chnid,d1 -> move.b d1,sound_psg
+            // lsr.w #4,d0 -> andi.b #$7f,d0 -> move.b d0,sound_psg
+            
+            // Note: We do NOT clamp psgPitch to 0x3FF (10 bits) here because the assembly 
+            // uses mask 0x7F for the high byte, effectively allowing 7 bits (Total 4+7=11 bits?).
+            // Even if PSG is 10-bit, we must send exactly what assembly sends.
+            
             int low4 = psgPitch & 0x0F;
-            int high6 = (psgPitch >> 4) & 0x3F;
+            int high = (psgPitch >> 4) & 0x7F;
 
-            psgPitch &= 0x3FF;
             Memory psg = getPsgMemory();
             psg.write8(MdDef.sound_psg, chVal | low4);
-            psg.write8(MdDef.sound_psg, high6);
+            psg.write8(MdDef.sound_psg, high);
         }
     }
 
     private void mds_psg_update_env(WorkArea a0, TrackData t, int chVal) {
         Memory psg = getPsgMemory();
-
+        
         // Assembly (line 2712): tst.l flag; bpl.w @silence
         // Check if track is enabled (bit 31 of flag = nf_enabled)
         if ((t.t_note_flag & (1 << nf_enabled)) == 0) {
-            t.t_psg_eg_pos = 0xff;
-            t.t_psg_eg_delay = 0x0f;
-            t.t_channel_flag &= ~(1 << cf_key_on);
-            t.t_note_flag &= ~(1 << nf_key_off);
-            psg.write8(MdDef.sound_psg, chVal | 0x10 | 0x0f);
+            mds_psg_silence(t, chVal, psg);
             return;
         }
 
@@ -1756,7 +2030,11 @@ public class MdsDrv {
         
         if (pos == 0) {
             // Was 0xff, now 0 -> silence
-            mds_psg_silence(t, chVal, psg);
+            // OPTIMIZATION: Only write mute if not already silenced
+            // This prevents redundant mute writes every frame for silenced tracks
+            if (t.t_psg_eg_pos != 0xff) {
+                mds_psg_silence(t, chVal, psg);
+            }
             return;
         }
 
@@ -1782,41 +2060,52 @@ public class MdsDrv {
 
     int cmd = envData.read8(pos - 1) & 0xff;  // Read at pos-1
 
-        // Assembly (lines 2782-2794): Sustain command handling
-        if ((t.t_note_flag & (1 << nf_sustain)) == 0) {
-            // Not sustaining yet
-            if (cmd == 0x01) {
-                // Start sustain
-                t.t_note_flag |= (1 << nf_sustain);
-                // Read next command
-                cmd = envData.read8(pos) & 0xff;
-                pos++;
-            }
-        } else {
-            // Already sustaining
-            if (cmd == 0x01) {
-                // Hold at current volume
-                int vol = t.t_psg_eg_delay & 0x0f;
-                t.t_psg_eg_delay = vol;  // Clear high nibble
-                if ((t.t_note_flag & (1 << nf_vol)) != 0) {
-                    t.t_note_flag &= ~(1 << nf_vol);
+        // Assembly processes multiple envelope commands per frame in a loop
+        // When cmd is 0x01 (sustain) or 0x02 (jump), it reads next byte and continues
+        boolean readMore = true;
+        while (readMore) {
+            readMore = false;  // Default: exit loop after this iteration
+
+            // Assembly (lines 2782-2794): Sustain command handling
+            if ((t.t_note_flag & (1 << nf_sustain)) == 0) {
+                // Not sustaining yet
+                if (cmd == 0x01) {
+                    // Start sustain - read next command and CONTINUE PROCESSING
+                    t.t_note_flag |= (1 << nf_sustain);
+                    cmd = envData.read8(pos) & 0xff;
+                    pos++;
+                    readMore = true;  // Loop to process the new cmd
+                    continue;
                 }
-                writePsgVolume(a0, t, chVal, vol, psg);
+            } else {
+                // Already sustaining
+                if (cmd == 0x01) {
+                    // Hold at current volume (assembly lines 2757-2759)
+                    int vol = t.t_psg_eg_delay & 0x0f;
+                    t.t_psg_eg_delay = vol;  // Clear high nibble
+                    boolean volFlagSet = (t.t_note_flag & (1 << nf_vol)) != 0;
+                    t.t_note_flag &= ~(1 << nf_vol);
+                    if (volFlagSet) {
+                        writePsgVolume(a0, t, chVal, vol, psg);
+                    }
+                    return;  // Assembly returns after checking flag
+                }
+            }
+
+            // Assembly (lines 2800-2806): Jump command
+            if (cmd == 0x02) {
+                pos = envData.read8(pos) & 0xff;  // Read jump target
+                cmd = envData.read8(pos) & 0xff;  // Read command at target
+                pos++;
+                readMore = true;  // Loop to process the new cmd
+                continue;
+            }
+
+            // Assembly (lines 2812-2821): Check for silence (cmd < 0x10)
+            if (cmd < 0x10) {
+                mds_psg_silence(t, chVal, psg);
                 return;
             }
-        }
-
-        // Assembly (lines 2800-2806): Jump command
-        if (cmd == 0x02) {
-            pos = envData.read8(pos) & 0xff;  // Read jump target
-            cmd = envData.read8(pos) & 0xff;  // Read command at target
-            pos++;
-        }
-
-        // Assembly (lines 2812-2821): Check for silence (cmd < 0x10)
-        if (cmd < 0x10) {
-            mds_psg_silence(t, chVal, psg);
-            return;
         }
 
         // Assembly (lines 2823-2828): Valid volume+delay command
@@ -1872,16 +2161,21 @@ public class MdsDrv {
 
         // Add envelope volume (clamped to 0-15)
         int finalVol = trackVol + (envVol & 0x0f);
-
         // Add global volume (low byte from w_volume)
         if (t.t_request_id < RCOUNT * 2) {
-            finalVol += a0.w_volume[t.t_request_id >> 1] & 0xff;
+            int globalVol = a0.w_volume[t.t_request_id >> 1] & 0xff;
+            // if (chVal == 128 && globalVol != 0) System.out.println("Global Vol Add: " + globalVol);
+            finalVol += globalVol;
         }
 
         // Clamp to max 15 (PSG volume is 4-bit, where 15 = silent)
         if (finalVol > 15) finalVol = 15;
         
+        // if (chVal == 128 && debugCounter < 100)
+        //     System.out.printf("writePsgVolume: Ch:%d tVol:%02x trkVol:%d envVol:%d finalVol:%d%n", chVal, tVol, trackVol, envVol, finalVol);
+        
         // Write to PSG (chVal | 0x10 = volume command for channel)
+        // if (chVal == 128 && debugCounter < 100) System.out.println("PSG Write: " + Integer.toHexString(chVal | 0x10 | finalVol));
         psg.write8(MdDef.sound_psg, chVal | 0x10 | finalVol);
     }
 
@@ -1893,35 +2187,66 @@ public class MdsDrv {
         mds_psg_update_env(a0, t, chVal); // Assembly: bsr.w mds_psg_update_env
         int pitch = mds_pitch_update(a0, t); // Assembly: bsr.w mds_pitch_update
 
-        int d1 = t.t_psg_nreset;
-        boolean noiseReset = (d1 & 0x8000) != 0; // bmi.s @noise_reset
+        // Assembly loads WORD where high=nreset, low=nmode
+        // In Java we have separate fields, so combine them:
+        // nreset bit 15 (high bit of nreset field) triggers reset
+        // nmode contains the actual noise mode value (e.g. 0xE7)
+        int nreset = t.t_psg_nreset;
+        int nmode = t.t_psg_nmode;
+        boolean noiseReset = (nreset & 0x80) != 0; // bmi.s @noise_reset (bit 7 of high byte)
 
-        // bclr #nf+nf_nmode,flag (returns previous state)
+        // bclr #nf+nf_nmode,flag (clears bit, returns previous state)
+        // Assembly DOES clear the bit - bclr clears and returns old value
         boolean nmodeWasSet = (t.t_note_flag & (1 << nf_nmode)) != 0;
-        t.t_note_flag &= ~(1 << nf_nmode);
+        t.t_note_flag &= ~(1 << nf_nmode);  // Clear the flag (assembly bclr does this!)
 
         if (nmodeWasSet) {
             noiseReset = true; // bne.s @noise_reset
         }
 
         if (!noiseReset) {
-            if (pitch == t.t_last_pitch) { // cmp.w t_last_pitch(twork),d0
-                return; // beq.w mds_update_return
-            }
-        } else {
-            // @noise_reset
-            if ((d1 & 0xff) != 0) { // tst.b d1 / beq.s @no_psg3_control
-                // move.b d1,sound_psg
-                getPsgMemory().write8(MdDef.sound_psg, d1 & 0xff);
-                // bra.s mds_psg_update_pitch -> falls through to pitch update below
+            // Check against PREVIOUS pitch (converted to freq)
+            // But we haven't converted 'pitch' (Note Code) yet.
+            // In assembly, 'mds_psgn_update' -> 'mds_psg_set_pitch' -> 'mds_get_psg_pitch'
+            // So comparison should happen on Freq? 
+            // Assembly 2905: cmp.w t_last_pitch, d0 (d0 IS PROBABLY NoteCode here? No, d0 comes from Pitch Update)
+            // Wait. Assembly mds_psg_update_pitch:
+            // 2905: cmp.w t_last_pitch(twork),d0
+            // 2909: bsr.w mds_get_psg_pitch
+            // So comparison uses NoteCode. last_pitch stores NoteCode?
+            // Line 2908: move.w d0,t_last_pitch(twork) (Stores NoteCode before conversion).
+            // So comparison and storage use NoteCode. Conversion happens AFTER.
+            
+            if (pitch == t.t_last_pitch) { 
+                return; 
             }
         }
+        
+        t.t_last_pitch = pitch; // Store NoteCode
 
-        // @no_psg3_control / mds_psg_update_pitch
-        t.t_last_pitch = pitch;
-        // ror.w #8,d0 -> andi.b #$07,d0 -> ori.b #$e0,d0 -> move.b d0,sound_psg
-        // d0 is pitch (16-bit). ror #8 puts high byte in low byte.
-        // so we take high byte, mask 0x07, OR with 0xE0.
+        // Now convert logic
+        if (noiseReset && nmode != 0) {
+             // Explicit Noise Mode Set
+             getPsgMemory().write8(MdDef.sound_psg, nmode & 0xff);
+             // Assembly jumps to mds_psg_update_pitch which calculates Freq but writes garbage data (ignored).
+             // So we just stop here (after updating last_pitch/calculating freq if needed?).
+             // We don't need to calculate Freq since we don't use it.
+             return;
+        }
+
+        // @no_psg3_control logic (Pitch -> Mode)
+        // Convert NoteCode to Freq ONLY for this path?
+        // Assembly 2955: move.w d0,t_last_pitch
+        // 2956: ror.w #8,d0 ...
+        // Wait. @no_psg3_control starts at 2954.
+        // It does NOT call mds_get_psg_pitch!
+        // It uses d0 (NoteCode) DIRECTLY!
+        // ror.w #8,d0 -> High Byte of NoteCode is used.
+        // My trace "27392" (0x6B00) is NoteCode. 0x6B (107).
+        // 0x6B & 7 = 3. 0xE3.
+        // So this logic works on NoteCode.
+        
+        // Java: pitch is NoteCode.
         int val = ((pitch >> 8) & 0x07) | 0xE0;
         getPsgMemory().write8(MdDef.sound_psg, val);
     }
@@ -1952,6 +2277,9 @@ public class MdsDrv {
         // Detune is a SIGNED byte - sign extend it (assembly uses ext.w)
         int dtn = (byte) t.t_dtn;  // Cast to byte for sign extension
         int pitch = (note << 8) + dtn;
+        if (t.t_channel_id == 6 && debugCounter < 100) { // Ch6 = PSG Ch0
+             // System.out.printf("PitchUpdate: Note=%d Trs=%d Dtn=%d RawPitch=%d%n", note, t.t_trs, dtn, pitch);
+        }
 
         // Portamento update (Assembly lines 1997-2028)
         int current = t.t_pitch;
@@ -2130,16 +2458,27 @@ public class MdsDrv {
             int noteIdx = mds_note_table[note];
             
             int f1 = mds_psg_freq_tab[noteIdx / 2];
-            // Interpolate with next semitone
             // Assembly: f1 - f2 -> delta. delta * fraction -> sub from f1.
             // Ensure table boundary safety (table has 13 entries)
             int f2 = mds_psg_freq_tab[(noteIdx / 2) + 1];
             
+            // Assembly: mulu d1,d0 where d1 = fraction << 8
+            // Result is 32-bit: delta * fraction * 256
+            // swap d0 -> equivalent to >> 16
+            // So total shift relative to integer 'fraction' is >> 8
             int delta = f1 - f2;
             int diff = (delta * fraction) >> 8;
-            int interpolated = f1 - diff;
             
-            freq = interpolated >> oct;
+            // neg.w d0 -> d0 = -diff
+            // add.w -(tmpa0),d0 -> f1 - diff
+            freq = f1 - diff;
+            
+            // if (t.t_channel_id == 8 && debugCounter < 100) {
+            //     System.out.printf("GetPsgPitch Ch8: Note=%d Oct=%d NoteIdx=%d F1=%d Diff=%d FreqAfter=%d%n", 
+            //         note, oct, noteIdx, f1, diff, freq >> oct);
+            // }
+
+            freq >>= oct;
         }
         return freq;
     }
@@ -2513,7 +2852,7 @@ public class MdsDrv {
         return seqChunk;
     }
     
-    private static class ByteArrayMemory implements Memory {
+    public static class ByteArrayMemory implements Memory {
         private final byte[] data;
         
         public ByteArrayMemory(byte[] data) {
