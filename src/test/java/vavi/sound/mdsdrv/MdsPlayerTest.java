@@ -3,7 +3,6 @@ package vavi.sound.mdsdrv;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
@@ -63,35 +62,42 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
 
         // Check for RIFF header and extract Sequence Data
         byte[] seqData = mdsData;
+        int seqOffset = 0;
         if (mdsData.length >= 12 && mdsData[0] == 'R' && mdsData[1] == 'I' && mdsData[2] == 'F' && mdsData[3] == 'F' &&
                 mdsData[8] == 'M' && mdsData[9] == 'D' && mdsData[10] == 'S' && mdsData[11] == '0') {
 
+            // For RIFF MDS files, we pass the entire file and let driver parse from seq offset
+            // The seq chunk contains track data, while LIST/glob chunks contain instruments
             int p = 12;
             while (p < mdsData.length - 8) {
                 // Read Chunk ID
-                if (mdsData[p] == 's' && mdsData[p + 1] == 'e' && mdsData[p + 2] == 'q' && mdsData[p + 3] == ' ') {
-                    // Found seq chunk
-                    int size = (mdsData[p + 4] & 0xFF) | ((mdsData[p + 5] & 0xFF) << 8) | ((mdsData[p + 6] & 0xFF) << 16)
-                            | ((mdsData[p + 7] & 0xFF) << 24);
-                    if (p + 8 + size <= mdsData.length) {
-                        seqData = new byte[size];
-                        System.arraycopy(mdsData, p + 8, seqData, 0, size);
-                        System.out.println("Extracted seq chunk: " + size + " bytes");
-                        break; // Found it
-                    }
-                }
-                // Skip chunk
+                char c0 = (char)mdsData[p], c1 = (char)mdsData[p+1], c2 = (char)mdsData[p+2], c3 = (char)mdsData[p+3];
+                String chunkId = "" + c0 + c1 + c2 + c3;
                 int size = (mdsData[p + 4] & 0xFF) | ((mdsData[p + 5] & 0xFF) << 8) | ((mdsData[p + 6] & 0xFF) << 16)
                         | ((mdsData[p + 7] & 0xFF) << 24);
+                
+                System.out.println("RIFF chunk '" + chunkId + "' size=" + size + " at offset " + p);
+                
+                if (mdsData[p] == 's' && mdsData[p + 1] == 'e' && mdsData[p + 2] == 'q' && mdsData[p + 3] == ' ') {
+                    // Found seq chunk - pass entire file from seq data start
+                    // This includes seq data AND following LIST/glob chunks
+                    seqOffset = p + 8;
+                    int remainingSize = mdsData.length - seqOffset;
+                    seqData = new byte[remainingSize];
+                    System.arraycopy(mdsData, seqOffset, seqData, 0, remainingSize);
+                    System.out.println("Extracted from seq offset: " + remainingSize + " bytes (seq + LIST chunks)");
+                }
                 // Pad byte if size is odd (RIFF standard)
                 if ((size & 1) != 0)
                     size++;
                 p += 8 + size;
             }
-        }
+            
+            }
 
         // Create root memory
-        Memory mdsMem = new ByteArrayMemory(seqData, 0);
+        // Pass full RIFF file to driver (MdsDrv will parse chunks)
+        Memory mdsMem = new ByteArrayMemory(mdsData, 0);
 
         // Initialize Chips
         int sampleRate = 44100;
@@ -187,8 +193,12 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
             }
             
             // Update Chips
+if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipFm", "false")))
             fm.update(fmBuf, samplesPerStep);
+if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPsg", "false")))
             psg.update(psgBuf, samplesPerStep);
+System.err.println("psgBuf: " + psgBuf[0][0] + ", " + psgBuf[1][0]);
+System.err.println("fmBuf: " + fmBuf[0][0] + ", " + fmBuf[1][0]);
             
             // Mix
             for (int i = 0; i < samplesPerStep; i++) {

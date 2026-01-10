@@ -7,9 +7,9 @@ package vavi.sound.mdsdrv;
  */
 public class MdDef {
 
-    // ======================================================================
+    //
     // Hardware defines
-    // ======================================================================
+    //
     public static final int vdp_data = 0xc00000;
     public static final int vdp_control = 0xc00004;
     public static final int vdp_counter = 0xc00008;
@@ -57,9 +57,9 @@ public class MdDef {
     public static final int pe_pcm3 = 5;
     public static final int pe_fade_stop = 4;
 
-    // ======================================================================
+    //
     // joypad control
-    // ======================================================================
+    //
     public static final int joy1_push = 0xfffffff0;
     public static final int joy1_press = 0xfffffff2;
     public static final int joy2_push = 0xfffffff4;
@@ -94,9 +94,9 @@ public class MdDef {
 
     public static final int last_vbl = 0xfffffff8;
 
-    // ======================================================================
+    //
     // VDP control
-    // ======================================================================
+    //
     public static final int vram_read_flag = 0x00000000;
     public static final int vram_write_flag = 0x40000000;
     public static final int cram_read_flag = 0x00000020;
