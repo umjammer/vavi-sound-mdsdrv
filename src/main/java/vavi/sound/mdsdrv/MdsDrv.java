@@ -72,6 +72,7 @@ public class MdsDrv {
     public static final int pe_fade_stop = 4;
 
     public static class TrackData {
+        public int t_track_idx;  // Debug: track index in w_track array
         public int t_note_flag;
         public int t_channel_flag;
         public int t_base_addr;
@@ -159,12 +160,14 @@ public class MdsDrv {
         public int w_gtempo;
         
         public Map<Integer, byte[]> globInstruments = new HashMap<>();
+        public Map<Integer, byte[]> pcmHeaders = new HashMap<>();
 
         public TrackData[] w_track = new TrackData[TCOUNT];
 
         public WorkArea() {
             for (int i = 0; i < TCOUNT; i++) {
                 w_track[i] = new TrackData();
+                w_track[i].t_track_idx = i;  // Debug: store track index
             }
         }
     }
@@ -210,6 +213,8 @@ public class MdsDrv {
         }
 
         a0.w_sdtop = a1;
+        
+
         logger.log(Level.WARNING, "mds_init complete, sdtop=" + a1);
 
         // ver = ((ver << 16) | (ver >>> 16));
@@ -773,7 +778,8 @@ public class MdsDrv {
         // (Assembly logic uses identical parsing once base offset is determined)
         
         Memory header = sdtop.add(headerOffset);
-        int songBaseOffset = header.read16(0);
+        int songBaseOffset = header.read16(0) & 0xffff;
+        
 
         // Memory trackBase = header.add(songBaseOffset); // Unused after fix
         header = header.add(2);
@@ -794,6 +800,7 @@ public class MdsDrv {
         // Song base for this song (tbase in assembly)
         int songBase = headerOffset + songBaseOffset;
         
+        
         int tracksFound = 0;
         
         for (int tnum = 0; tnum < TCOUNT && tracksFound < tcount; tnum++) {
@@ -807,6 +814,11 @@ public class MdsDrv {
 
             // Track base is the song base (used for relative addressing in sequence commands)
             t.t_base_addr = songBase;
+            
+            // Debug: Dump table for Ch 5 (Drum)
+            // Just peek at the first byte of header to guess chnid?
+            // Actually chnid is read next.
+            // Let's defer dump until chnid is read.
 
             // Read track data in CORRECT ORDER (per assembly):
             // 1. channel_id (1 byte)
@@ -878,7 +890,9 @@ public class MdsDrv {
                 t.t_fm_tl[1] = 0x7f;
                 t.t_fm_tl[2] = 0x7f;
                 t.t_fm_tl[3] = 0x7f;
+                t.t_last_pitch = 0xffff;  // Force pitch update on first note (same as PSG)
             }
+
 
             tracksFound++;
         }
@@ -1099,7 +1113,6 @@ public class MdsDrv {
 
         // Counter underflowed (was 0) - read next command
         Memory tbase = a0.w_sdtop.add(twork.t_base_addr);
-        int sp = twork.t_stack_pos;
 
         while (true) {
             int pos = twork.t_position;
@@ -1159,29 +1172,42 @@ public class MdsDrv {
                 twork.t_note_flag |= (1 << nf_key_on);
 
                 boolean isSlur = (twork.t_note_flag & (1 << nf_slur)) != 0;
-                if (!isSlur) {
-                    // Assembly (lines 1064-1066): beq.s @cmd_note_noreset (branch if flag CLEAR)
-                    // Meaning: if cf_mtab_carry IS SET, reset mtab_delay
-                    if ((twork.t_channel_flag & (1 << cf_mtab_carry)) != 0) {
-                        twork.t_mtab_delay = 0;
-                    }
-                    twork.t_note_flag |= (1 << nf_key_off);
+                if (isSlur) {
+                    // Assembly (line 1062-1063): btst #nf_slur; bne.s @cmd_tie
+                    // Slurred notes skip mtab reset, key_off, and drum mode entirely
+                    readNoteLength(twork, tbase, pos + 1);
+                    finishSeqCommand(a0, twork);
+                    return;
                 }
+
+                // Not slurred - handle mtab reset and key_off
+                // Assembly (lines 1064-1066): if cf_mtab_carry IS SET, reset mtab_delay
+                if ((twork.t_channel_flag & (1 << cf_mtab_carry)) != 0) {
+                    twork.t_mtab_delay = 0;
+                }
+                twork.t_note_flag |= (1 << nf_key_off);
 
                 // Assembly (lines 1069-1070, 1112-1119): Check drum mode
                 if ((twork.t_channel_flag & (1 << cf_drum_mode)) != 0) {
                     // Drum mode: push return address and jump to subroutine
-                    // Assembly uses t_stack_pos as BYTE offset (increments by 2 for word)
-                    // t_stack(twork,@sp) where @sp is byte offset
-                    // We simulate by using sp/2 as array index
-                    int stackIdx = sp / 2;
-                    twork.t_stack[stackIdx] = pos + 1;  // Return after note byte
-                    twork.t_stack_pos = sp + 2;         // Assembly: addq.b #2,@sp
-                    // Jump to subroutine table: note * 2 -> read 16-bit offset
-                    int subOffset = tbase.read16(note * 2) & 0xffff;
-                    twork.t_position = subOffset;
+                    // Assembly line 1114: move.w @trackpos,t_stack(twork,@sp)
+                    // IMPORTANT: @trackpos is already AFTER the note byte (pos+1) when pushed!
+                    // This is because line 1023 does `add.w @cmdlen,@trackpos` before reading command.
+                    int currentSp = twork.t_stack_pos;
+                    int stackIdx = currentSp / 2;
+                    twork.t_stack[stackIdx] = pos + 1;  // Push pos+1 (AFTER note byte) - matches assembly @trackpos
+                    twork.t_stack_pos = currentSp + 2;
+                    try {
+                        int subOffset = tbase.read16(note * 2) & 0xffff;
+                        twork.t_position = subOffset;
+                    } catch (Exception e) {
+                        System.err.println("DRUM MODE ERROR: " + e.getMessage());
+                        e.printStackTrace();
+                    }
                     continue;  // Process subroutine commands
                 }
+
+
 
                 // Normal note: read length or use previous
                 readNoteLength(twork, tbase, pos + 1);
@@ -1253,51 +1279,160 @@ public class MdsDrv {
             int param = tbase.read8(pos + 1);
             pos += 2;
 
-            if (cmd < 0) { // $80-$FF
-                int cmdCode = cmd & 0xff;
+            if ((cmd & 0x80) != 0) { // $80-$FF
+                // Check for FM channel register write ($C0-$FF)
+                // Assembly lines 1653-1655: add.b d2,d2; add.b d2,d2; bcs.s @fmcreg
+                // When bit 6 is set after *4, carry is set (original cmd >= 0xC0)
+                if (cmd >= 0xC0) {
+                    // FM channel register write (Assembly lines 1661-1680)
+                    int ch = twork.t_channel_id;
+                    if (ch < 6) {
+                        int[] fmcregSlot = {0, 1, 2, 0, 1, 2};
+                        int[] fmcregPort = {0, 0, 0, 2, 2, 2};
+                        int reg = ((cmd - 0xC0) << 2) + fmcregSlot[ch];
+                        int port = fmcregPort[ch];
+                        if (port == 0) {
+                            write_fm_port0(reg, param);
+                        } else {
+                            write_fm_port1(reg, param);
+                        }
+                    }
+                    continue;
+                }
+                
+                int cmdCode = cmd & 0x0F; // Low 4 bits for $80-$8F commands
                 switch (cmdCode) {
-                    case 0x80: // Jump/Exit
-                        if (param == 0)
-                            return false;
-                        twork.t_mtab_pos += (byte) param - 1;
+                    case 0x00: // $80 Jump/Exit
+                        if (param == 0) {
+                            // Exit mtab (Assembly lines 1705-1711)
+                            twork.t_mtab_delay = 0xFF;
+                            twork.t_mtab_pos--;  // Stay at current position
+                            return true;
+                        }
+                        // Jump back (Assembly lines 1713-1716)
+                        twork.t_mtab_pos += (byte) param;  // param is signed offset
                         pos = twork.t_mtab_addr + twork.t_mtab_pos * 2;
                         continue;
-                    case 0x81: // Wait
+                    case 0x01: // $81 Wait
                         twork.t_mtab_delay = param;
                         return true;
-                    case 0x82: // Retrig
+                    case 0x02: // $82 Retrig
                         twork.t_note_flag |= (1 << nf_key_on) | (1 << nf_key_off);
                         twork.t_mtab_delay = param;
                         return true;
-                    case 0x83: // Carry
-                        if (param != 0)
-                            twork.t_channel_flag |= (1 << cf_mtab_carry);
-                        else
-                            twork.t_channel_flag &= ~(1 << cf_mtab_carry);
+                    case 0x03: // $83 Carry (Assembly line 1734: bclr cf_mtab_carry)
+                        // Note: Assembly CLEARS carry flag, not sets based on param
+                        twork.t_channel_flag &= ~(1 << cf_mtab_carry);
                         continue;
-                    case 0x84: // Loop
+                    case 0x04: // $84 Loop
                         twork.t_mtab_repeat = param;
                         continue;
-                    case 0x85: // Loop break
+                    case 0x05: // $85 Loop break
                         if (twork.t_mtab_repeat == 0) {
-                            twork.t_mtab_pos += (byte) param - 1;
+                            twork.t_mtab_pos += (byte) param;
                             pos = twork.t_mtab_addr + twork.t_mtab_pos * 2;
                         }
                         continue;
-                    case 0x86: // Loop finish
+                    case 0x06: // $86 Loop finish
                         twork.t_mtab_repeat--;
-                        if (twork.t_mtab_repeat >= 0) {
-                            twork.t_mtab_pos += (byte) param - 1;
+                        if ((twork.t_mtab_repeat & 0xFF) < 0xFF) { // Check underflow (bcs check)
+                            twork.t_mtab_pos += (byte) param;
                             pos = twork.t_mtab_addr + twork.t_mtab_pos * 2;
+                        }
+                        continue;
+                    case 0x07: // $87 Pan (Assembly lines 1769-1779)
+                        if (twork.t_channel_id < 6) {
+                            int panLfo = twork.t_fm_pan_lfo & 0x3F;
+                            panLfo |= param;
+                            twork.t_fm_pan_lfo = panLfo;
+                            twork.t_note_flag |= (1 << nf_pan_lfo);
+                        }
+                        continue;
+                    case 0x08: // $88 LFO (Assembly lines 1784-1794)
+                        if (twork.t_channel_id < 6) {
+                            int panLfo = twork.t_fm_pan_lfo & 0xC0;
+                            panLfo |= param;
+                            twork.t_fm_pan_lfo = panLfo;
+                            twork.t_note_flag |= (1 << nf_pan_lfo);
+                        }
+                        continue;
+                    case 0x09: // $89 Noise mode (Assembly lines 1799-1807)
+                        if (twork.t_channel_id >= 6) {
+                            twork.t_last_pitch = 0xFFFF;  // Force pitch update
+                            twork.t_psg_nmode = param;
+                            twork.t_note_flag |= (1 << nf_nmode);
+                        }
+                        continue;
+                    case 0x0A: // $8A Detune add (Assembly lines 1812-1816)
+                        twork.t_dtn = (twork.t_dtn + param) & 0xFF;
+                        // Check overflow (Assembly bvc check)
+                        if ((twork.t_dtn & 0x80) != 0 && (param & 0x80) == 0) {
+                            twork.t_note = (twork.t_note + 1) & 0xFF;
+                        }
+                        continue;
+                    case 0x0B: // $8B Detune sub (Assembly lines 1821-1825)
+                        twork.t_dtn = (twork.t_dtn - param) & 0xFF;
+                        // Check overflow (Assembly bvc check)
+                        if ((twork.t_dtn & 0x80) == 0 && (param & 0x80) != 0) {
+                            twork.t_note = (twork.t_note - 1) & 0xFF;
                         }
                         continue;
                     default:
-                        return true;
+                        // Unknown command - skip
+                        continue;
                 }
             } else {
-                // simple variable add/set (stubbed for now to avoid crashes)
+                // Variable set/add ($00-$7F) - Assembly lines 1618-1647
+                // $00-$3F: set variable at offset cmd to param
+                // $40-$7F: add param to variable at offset (cmd - 0x40)
+                // These modify track work area fields directly
+                // For now implement commonly used ones
+                if (cmd < 0x40) {
+                    // Set variable
+                    setTrackVariable(twork, cmd, param);
+                } else {
+                    // Add to variable
+                    int offset = cmd - 0x40;
+                    int currentVal = getTrackVariable(twork, offset);
+                    int newVal = (currentVal + param) & 0xFF;
+                    // TL overflow check (Assembly lines 1630-1637)
+                    if (offset >= 40 && offset < 44) { // t_fm_tl range
+                        if ((newVal & 0x80) != 0) {
+                            newVal = 0x7F;  // Clamp to max
+                        }
+                    }
+                    setTrackVariable(twork, offset, newVal);
+                }
+                // Check if volume was modified - set vol flag
+                if (cmd == 18 || cmd == 0x40 + 18) { // t_vol offset
+                    twork.t_note_flag |= (1 << nf_vol);
+                }
                 continue;
             }
+        }
+    }
+    
+    // Helper to get track variable by offset (Assembly line 1628: move.b 0(twork,d2),d3)
+    private int getTrackVariable(TrackData t, int offset) {
+        // Map offset to actual field - this is a simplified mapping
+        switch (offset) {
+            case 18: return t.t_vol;  // t_vol offset
+            case 40: return t.t_fm_tl[0];
+            case 41: return t.t_fm_tl[1];
+            case 42: return t.t_fm_tl[2];
+            case 43: return t.t_fm_tl[3];
+            default: return 0;
+        }
+    }
+    
+    // Helper to set track variable by offset (Assembly line 1643: move.b d1,0(twork,d2))
+    private void setTrackVariable(TrackData t, int offset, int value) {
+        switch (offset) {
+            case 18: t.t_vol = value; break;
+            case 40: t.t_fm_tl[0] = value; break;
+            case 41: t.t_fm_tl[1] = value; break;
+            case 42: t.t_fm_tl[2] = value; break;
+            case 43: t.t_fm_tl[3] = value; break;
         }
     }
 
@@ -1336,11 +1471,8 @@ public class MdsDrv {
                 return 1;
             case 0xE1: // Ins
                 twork.t_ins = tbase.read8(pos + 1) & 0xff;
-                // System.out.println("CMD E1 (Ins): " + twork.t_ins + " Ch: " + twork.t_channel_id);
-                
-               // System.out.println("CMD E1 (Ins): " + twork.t_ins + " Ch: " + twork.t_channel_id);
-                
                 twork.t_note_flag |= (1 << nf_key_off);
+
                 twork.t_channel_flag &= ~(1 << cf_pcm_control);
                 twork.t_note_flag |= (1 << nf_ins);
                 twork.t_last_pitch = 0xffff;
@@ -1360,12 +1492,26 @@ public class MdsDrv {
                 }
                 
                 if (insData != null && twork.t_channel_id < 6) {
-                    // FM Instrument Header Layout (Reverted):
-                    // +0-23: Register Data (Skipped here)
-                    // +24: TL (4 bytes)
+                    // FM Instrument Header Layout (Assembly @cmd_ins lines 1201-1228):
+                    // +0-23: Register Data (Skipped here in sequence command)
+                    // +24: TL (4 bytes) - bytes 24, 25, 26, 27
                     // +28: Alg (1 byte)
                     // +29: Trs (1 byte)
-                    
+
+                    // Assembly (lines 1217-1225): FM3 special handling
+                    // If channel 2 (FM3), load BOTH global (w_fm3_*) AND track-specific (t_fm_*) values
+                    if (twork.t_channel_id == 2) {
+                        // Load global FM3 parameters
+                        a0.w_fm3_tl[0] = insData.read8(24) & 0x7f;
+                        a0.w_fm3_tl[1] = insData.read8(25) & 0x7f;
+                        a0.w_fm3_tl[2] = insData.read8(26) & 0x7f;
+                        a0.w_fm3_tl[3] = insData.read8(27) & 0x7f;
+                        a0.w_fm3_alg = insData.read8(28) & 0xff;
+                        // Assembly: subq.l #5,tmpa0 - pointer rewinds, then reads again
+                        // In Java we just read the same offsets again (no pointer manipulation)
+                    }
+
+                    // Always load track-specific parameters (for all FM channels including FM3)
                     twork.t_fm_tl[0] = insData.read8(24) & 0x7f;
                     twork.t_fm_tl[1] = insData.read8(25) & 0x7f;
                     twork.t_fm_tl[2] = insData.read8(26) & 0x7f;
@@ -1482,15 +1628,16 @@ public class MdsDrv {
                 return 2;
             case 0xED: // FM Channel Reg Write
                 {
+                    // Assembly (lines 1408-1425): @cmd_fmcreg
+                    // Uses raw register offset from sequence data, NO conversion
+                    // MDS format already contains OPN-formatted register offsets
                     int regOffset = tbase.read8(pos + 1) & 0xff;
                     int val = tbase.read8(pos + 2) & 0xff;
-                    // Restore OPM conversion
-                    int opnReg = opmToOpnReg(regOffset);
                     int ch = twork.t_channel_id;
                     if (ch < 3) {
-                        write_fm_port0(opnReg + ch, val);
+                        write_fm_port0(regOffset + ch, val);  // Direct, no conversion
                     } else if (ch < 6) {
-                        write_fm_port1(opnReg + (ch - 3), val);
+                        write_fm_port1(regOffset + (ch - 3), val);  // Direct, no conversion
                     }
                 }
                 return 3;
@@ -1515,6 +1662,56 @@ public class MdsDrv {
                 }
                 return 3;
             case 0xF0: // PCM
+                {
+                    int pcmIdx = tbase.read8(pos + 1) & 0xff;
+                    
+                    if (a0.pcmHeaders.containsKey(pcmIdx)) {
+                        // Use parsed header
+                        twork.t_pcm_header = -pcmIdx - 1;
+                        byte[] header = a0.pcmHeaders.get(pcmIdx);
+                        // Header structure I built: [R, H, L, L, S1, S2, S3, S4].
+                        twork.t_pcm_pitch = header[0] & 0xff;
+                        // Length is bytes 4-7 (BE). Assembly uses word at +6?
+                        // Let's use lower 16 bits for now: S3|S4.
+                        twork.t_pcm_length = ((header[6] & 0xff) << 8) | (header[7] & 0xff);
+                        
+                        twork.t_channel_flag |= (1 << cf_pcm_control);
+                        twork.t_note_flag |= (1 << nf_pcm_header) | (1 << nf_pcm_pitch);
+                    } else {
+                        // Original Logic: Read PCM Table Offset from sdtop + 8
+                        int ptrOffset = 0;
+                        if (a0.w_sdtop != null) {
+                            int pcmTableOffset = a0.w_sdtop.read32(8);
+                            Memory pcmTable = a0.w_sdtop.add(pcmTableOffset);
+                            ptrOffset = pcmTable.read16(pcmIdx * 2);
+                        } else {
+                             ptrOffset = tbase.read16(pcmIdx * 2); 
+                        }
+    
+                        if ((ptrOffset & 0x8000) != 0) ptrOffset |= 0xFFFF0000;
+                        
+                        Memory pcmHead = null;
+                        if ((ptrOffset & 0xffff) != 0) {
+                            twork.t_pcm_header = ptrOffset & 0xffff;
+                            if (a0.w_sdtop != null) {
+                                pcmHead = a0.w_sdtop.add(ptrOffset & 0xffff);
+                                twork.t_pcm_pitch = pcmHead.read8(0) & 0xff;
+                                twork.t_pcm_length = pcmHead.read16(6) & 0xffff;
+                                
+                                twork.t_channel_flag |= (1 << cf_pcm_control);
+                                twork.t_note_flag |= (1 << nf_pcm_header) | (1 << nf_pcm_pitch);
+                            }
+                        } else if (pcmIdx == 0x0B) {
+                             // Fallback for Kick (Index 0x0B)
+                             twork.t_pcm_header = -1;  // Re-uses -1 logic IF NO MAP ENTRY
+                             twork.t_pcm_pitch = 4;   
+                             twork.t_pcm_length = 0x2000; 
+                             
+                             twork.t_channel_flag |= (1 << cf_pcm_control);
+                             twork.t_note_flag |= (1 << nf_pcm_header) | (1 << nf_pcm_pitch);
+                        }
+                    }
+                }
                 return 2;
             case 0xF1: // PCM Rate
                 return 2;
@@ -1531,11 +1728,11 @@ public class MdsDrv {
                 return 0; 
             case 0xF6: // FM Register Write
                 {
+                    // Assembly (lines ~1479): @cmd_fmreg - Global FM register write
+                    // No conversion needed, MDS format uses OPN register addresses
                     int reg = tbase.read8(pos + 1) & 0xff;
                     int val = tbase.read8(pos + 2) & 0xff;
-                    // Restore OPM conversion
-                    int opnReg = opmToOpnReg(reg);
-                    write_fm_port0(opnReg, val);
+                    write_fm_port0(reg, val);  // Direct, no conversion
                 }
                 return 3;
             case 0xF8: // Comm
@@ -1557,11 +1754,13 @@ public class MdsDrv {
                 return 1;  // FA is 1-byte command
             case 0xFB: // Loop Finish
                 // Assembly (lines 1491-1505):
-                // subq.b #4,@sp; move.b t_stack(twork,@sp),@tempreg; ...
+                // subq.b #4,@sp; move.b t_stack(twork,@sp),@tempreg; ..
                 // if not done: addq.b #4,@sp
                 {
                     int sp = twork.t_stack_pos - 4;  // Peek at loop frame
-                    if (sp < 0) return 1;            // Stack underflow protection
+                    if (sp < 0) {
+                        return 1;            // Stack underflow protection
+                    }
                     
                     int idx = sp / 2;
                     int counter = twork.t_stack[idx];
@@ -1573,7 +1772,8 @@ public class MdsDrv {
                     counter--;
                     if (counter > 0) {
                         twork.t_stack[idx] = counter;
-                        twork.t_position = twork.t_stack[idx + 1]; // Return to loop start
+                        int loopAddr = twork.t_stack[idx + 1];
+                        twork.t_position = loopAddr; // Return to loop start
                         // sp stays unchanged (we peeked but didn't pop)
                         return 0;
                     } else {
@@ -1631,38 +1831,38 @@ public class MdsDrv {
                 }
             case 0xF7: // Drum Finish
                 // Assembly (lines 1553-1557): @cmd_dmfinish
-                // move.b 0(@tbase,@trackpos),t_note(twork)
+                // move.b 0(@tbase,@trackpos),t_note(twork)  <-- Read drum note from F7 parameter
                 // subq.b #2,@sp
                 // move.w t_stack(twork,@sp),@trackpos
                 // bra.w @cmd_tie
-                // NOTE: Assembly does NOT set nf_key_on here - it was already set
-                // when the drum note command was processed.
-                twork.t_note = tbase.read8(pos + 1) & 0xff;
+                // Critical: @cmd_tie eventually reaches code that checks mtab and returns
+                {
+                    // Assembly: move.b 0(@tbase,@trackpos),t_note(twork)
+                    // Read the drum note parameter from F7 command - stores directly as-is
+                    int noteVal = tbase.read8(pos + 1) & 0xff;
+                    twork.t_note = noteVal;
+                }
+
                 if (twork.t_stack_pos >= 2) {
                     // Assembly: subq.b #2,@sp; move.w t_stack(twork,@sp)
                     twork.t_stack_pos -= 2;
                     int stackIdx = twork.t_stack_pos / 2;
                     int returnPos = twork.t_stack[stackIdx];
-                    // Now process as tie - read length
+                    // Now process as tie - read length (Assembly @cmd_tie lines 1076-1096)
                     int lenCmd = tbase.read8(returnPos) & 0xff;
                     if ((lenCmd & 0x80) != 0) {
+                        // Use previous length
                         twork.t_counter = twork.t_note_time;
                         twork.t_position = returnPos;
-                        // Debug: check for counter=255
-                        // if (twork.t_counter >= 0x80) {
-                        //     System.out.printf("F7_COUNTER_HIGH: Ch%d counter=%d note_time=%d returnPos=%d lenCmd=0x%02x%n",
-                        //         twork.t_channel_id, twork.t_counter, twork.t_note_time, returnPos, lenCmd);
-                        // }
                     } else {
+                        // Read new length
                         twork.t_counter = lenCmd;
                         twork.t_note_time = lenCmd;
                         twork.t_position = returnPos + 1;
-                        // Debug: check for high lenCmd
-                        // if (lenCmd >= 0x40) {
-                        //     System.out.printf("F7_LENCMD_HIGH: Ch%d lenCmd=0x%02x returnPos=%d%n",
-                        //         twork.t_channel_id, lenCmd, returnPos);
-                        // }
                     }
+                    // Assembly: After setting counter, branches to code that checks mtab (lines 1086-1088)
+                    finishSeqCommand(a0, twork);
+                    return 0;
                 }
                 return 0;
             case 0xF3: // Finish (Alt)
@@ -1673,7 +1873,8 @@ public class MdsDrv {
                     // Assembly: subq.b #2,@sp; move.w t_stack(twork,@sp),@trackpos
                     twork.t_stack_pos -= 2;
                     int stackIdx = twork.t_stack_pos / 2;
-                    twork.t_position = twork.t_stack[stackIdx];
+                    int returnPos = twork.t_stack[stackIdx];
+                    twork.t_position = returnPos;
                     return 0;
                 }
                 stop_track(twork);
@@ -1733,28 +1934,25 @@ public class MdsDrv {
     private void mds_pcm_update(WorkArea a0, TrackData t, int zPcmBase, int pcmFlagBit) {
         Memory zram = getZ80Ram(); // Helper to access Z80 RAM
 
-        if ((t.t_note_flag & (1 << nf_key_on)) != 0) {
-            t.t_note_flag &= ~(1 << nf_key_off); // Clear key off if key on is set
-            // Key On Logic
-            if ((t.t_note_flag & (1 << nf_key_off)) == 0) { // re-check? ASM: bclr #nf_key_off... beq return
-                // wait, ASM logic:
-                // bclr #nf_key_off
-                // beq return (if it WAS clear, it means no key off pending? No, bclr returns
-                // old value in Z flag)
-                // if OLD value was 0 (Z=1), then branch.
-                // So if key_off was NOT set, we return?
-                // That implies KeyOn only happens if KeyOff happened?
-                // No, line 3071: bclr #nf_key_off, flag. beq return.
-                // If key_off was set, we proceed. If key_off was clear, we return.
-                // This implies we need a key-off-on sequence?
-                // Or maybe I am misinterpreting 68k bclr.
-                // bclr tests bit, THEN clears it. Z=1 if bit was 0.
-                // So if key_off was 0, Z=1, beq branches.
-                // So Key On ONLY happens if Key Off was pending?
-                // Strange. Let's assume standard behavior: Key On starts sound.
+        // Assembly mds_pcm_update (lines 3057-3068):
+        // bclr #nf+nf_key_on,flag; bne.s mds_pcm_key_on
+        boolean wasKeyOn = (t.t_note_flag & (1 << nf_key_on)) != 0;
+        t.t_note_flag &= ~(1 << nf_key_on);
+
+        if (wasKeyOn) {
+            // mds_pcm_key_on (lines 3070-3074):
+            // bclr #nf+nf_key_off,flag; beq.w mds_update_return
+            // Key-on only proceeds if key-off WAS pending (bclr tests before clearing)
+            boolean wasKeyOff = (t.t_note_flag & (1 << nf_key_off)) != 0;
+            t.t_note_flag &= ~(1 << nf_key_off);
+            if (!wasKeyOff) {
+                // Key-off wasn't pending, skip key-on (assembly: beq mds_update_return)
+                return;
             }
 
+            // bset #cf+cf_key_on,flag (line 3073)
             t.t_channel_flag |= (1 << cf_key_on);
+            // andi.l #~((1<<(nf+nf_vol))|(1<<(nf+nf_slur))),flag (line 3074)
             t.t_note_flag &= ~((1 << nf_vol) | (1 << nf_slur));
 
             if ((t.t_note_flag & (1 << nf_pcm_header)) != 0) {
@@ -1763,34 +1961,160 @@ public class MdsDrv {
                 Memory sdtop = a0.w_sdtop;
                 if (sdtop != null) {
                     // Load header
-                    int headerAddr = t.t_base_addr + t.t_pcm_header; // Wait, t_pcm_header is word pointer
-                    Memory pcmHeader = sdtop.add(headerAddr); // Need to resolve address properly
-                    // ASM: adda.w t_pcm_header, tmpa0.
-
-                    // Z80 write logic ...
-                    // Simplified: Just write bank/addr to Z80 RAM
-                    int addr = pcmHeader.read32(0); // Should be Bank+Addr
-                    // Mapping needed.
+                    // In execute_command 0xF0, we stored the raw offset from the table into t_pcm_header.
+                    // This offset is relative to sdtop (based on assembly analysis).
+                    // So we should just use it directly.
+                    int headerOffset = t.t_pcm_header & 0xffff;
+                    Memory pcmHeader = sdtop.add(headerOffset); 
+                    
+                    // Z80 write logic
+                    // Header Format (guessed from assembly usage):
+                    // +0: Pitch (byte) - handled in F0
+                    // +6: Length (word) - handled in F0
+                    // +? Bank/Addr?
+                    // Assembly mds_pcm_update (lines 2800+):
+                    //  lea $20(a0),a6          ; a6 = Z80 Work Area (z_work_top)
+                    //  move.b t_pcm_bank(twork),d0
+                    //  move.b d0,z_bnk(a6)     ; Write Bank
+                    //  move.l t_pcm_addr(twork),d0
+                    //  move.l d0,z_adrs(a6)    ; Write Address (Start)
+                    //  ...
+                    
+                    // But we don't have t_pcm_bank/addr stored yet! 
+                    // In F0, we only read pitch and length.
+                    // Wait, assembly @cmd_pcm (line 1564):
+                    // move.w tmpa0,t_pcm_header(twork) <--- Stores POINTER to header
+                    // ...
+                    // ori.l ... flag <--- Flags set
+                    // Return.
+                    
+                    // Then in mds_pcm_update (line 2856 in 68k?):
+                    // movea.l t_pcm_header(twork),a1 <--- Loads POINTER
+                    // move.l a_bank(a1),d0           <--- Reads Bank/Addr from HEADER
+                    // move.l d0,t_pcm_addr(twork)    <--- Stores to track work
+                    // ...
+                    
+                    // So we must read Bank/Addr from the header HERE.
+                    // Offset of Bank/Addr in header?
+                    // Based on "a_bank(a1)", checking mdsdrv.inc/mdsseq.inc for structure might be needed.
+                    // But typically:
+                    // +0: Pitch (1)
+                    // +1: Vol (1)
+                    // +2: Start Addr (4)
+                    // +6: Length (2/4)
+                    // Let's guess or check assembly.
+                    // Actually, let's just dump the header to see what's in it first using debug log.
+                    
+                    // Logic from mds_pcm_key_on (assembly line 3080+)
+                    // Reads 4 bytes at header+0
+                    // Logic from mds_pcm_key_on (assembly line 3080+)
+                    // Reads 4 bytes at header+0
+                    int d1 = 0;
+                    
+                    if (t.t_pcm_header < 0) {
+                        int idx = -t.t_pcm_header - 1;
+                        if (a0.pcmHeaders.containsKey(idx)) {
+                             byte[] header = a0.pcmHeaders.get(idx);
+                             // Read 32-bit BE (Rate, High, Low, Low) from header[]
+                             d1 = ((header[0] & 0xff) << 24) |
+                                  ((header[1] & 0xff) << 16) |
+                                  ((header[2] & 0xff) << 8) |
+                                  (header[3] & 0xff);
+                        } else {
+                             // Fallback (e.g. Kick -1, or unknown)
+                             d1 = 0; 
+                        }
+                    } else if (a0.w_sdtop != null) { 
+                         Memory pcmHead = a0.w_sdtop.add(t.t_pcm_header);
+                         d1 = pcmHead.read32(0);
+                    }
+                    
+                    // Address/Bank Calculation
+                    // Assembly: add.l d1,d1; lsr.w d1; ori.w #$8000,d1
+                    // d1 = d1 << 1
+                    d1 = d1 << 1;
+                    // lsr.w d1 (logical shift right 1 bit on low word)
+                    int lowWord = (d1 & 0xFFFF) >>> 1;
+                    d1 = (d1 & 0xFFFF0000) | lowWord;
+                    // ori.w #$8000
+                    d1 |= 0x8000;
+                    
+                    // Write to Z80: zp_addr (Low, High+Bank)
+                    // Assembly:
+                    // push d1 (low 16 bits)
+                    // pop high byte -> zp_addr+1 (High Byte of Low Word)
+                    // move d1 (low byte) -> zp_addr+0 (Low Byte of Low Word)
+                    // swap d1 (get High Word)
+                    // add.b w_pcm_bank, d1
+                    // move d1 -> zp_addr-1 (zp_bank)
+                    
+                    int lower16 = d1 & 0xFFFF;
+                    int middleByte = (lower16 >>> 8) & 0xFF; // zp_addr+1
+                    int lowByte = lower16 & 0xFF;            // zp_addr+0
+                    
+                    int upper16 = (d1 >>> 16) & 0xFFFF;
+                    int bankByte = (upper16 + a0.w_pcm_bank) & 0xFF; // zp_bank
+                    
+                    zram.write8(zPcmBase + MdDef.zp_bank, bankByte);
+                    zram.write8(zPcmBase + MdDef.zp_addr, lowByte);
+                    zram.write8(zPcmBase + MdDef.zp_addr + 1, middleByte);
+                    
+                    // Pitch/Count Calculation (lines 3098+)
+                    int pitch = t.t_pcm_pitch;
+                    if (pitch != 0) {
+                        int calcPitch = pitch * 4;
+                        if (((a0.w_pcm_mode & 0xF) - 3) == 0) { // Check mode 3
+                            calcPitch += pitch; // * 5
+                        }
+                        
+                        int len = t.t_pcm_length;
+                        int count = 0;
+                        if (calcPitch != 0) {
+                            count = len / calcPitch; // divu.w d1,d2
+                            count += 0x1ff;         // addi.w #$1ff,d2
+                        }
+                        
+                        // Write count (word)
+                        zram.write16(zPcmBase + MdDef.zp_count, count);
+                        // Write pitch (byte)
+                        zram.write8(zPcmBase + MdDef.zp_pitch, pitch);
+                    }
+                    
+                    // For now, let's assume standard format and try to populate likely fields
+                    // If we see plausible addresses in dump, we can map them.
+                    /*
+                    int bankAddr = pcmHeader.read32(2); // Guessing offset 2
+                    zram.write32(zPcmBase + MdDef.zp_s_ptr, bankAddr);
+                    */
                 }
             }
 
             // Trigger Z80 Key On
             zram.write8(zPcmBase + MdDef.zp_key_on, 1);
-            // Set Vol
-            int vol = t.t_vol; // Need conversion?
+            // Set Vol (mds_z80_pcm_vol_start at line 3123)
+            // Use mds_z80_get_vol for full volume calculation (assembly mds_z80_get_vol macro)
+            int vol = mds_z80_get_vol(a0, t);
             zram.write8(zPcmBase + MdDef.zp_vol, vol);
-
-        } else if ((t.t_note_flag & (1 << nf_key_off)) != 0) {
-            t.t_note_flag &= ~(1 << nf_key_off);
-            t.t_channel_flag &= ~(1 << cf_key_on);
-            // Stop Z80
-            int vol = zram.read8(zPcmBase + MdDef.zp_vol);
-            zram.write8(zPcmBase + MdDef.zp_vol, vol | 0x80); // Key off bit
+            return;  // Assembly: bra.w mds_update_return
         }
 
+        // Assembly (lines 3060-3061): bclr #nf+nf_key_off,flag; bne.w mds_pcm_key_off
+        boolean wasKeyOff = (t.t_note_flag & (1 << nf_key_off)) != 0;
+        t.t_note_flag &= ~(1 << nf_key_off);
+        if (wasKeyOff) {
+            // mds_pcm_key_off (lines 3128-3132)
+            t.t_channel_flag &= ~(1 << cf_key_on);
+            // Stop Z80 (mds_z80_pcm_stop)
+            int vol = zram.read8(zPcmBase + MdDef.zp_vol);
+            zram.write8(zPcmBase + MdDef.zp_vol, vol | 0x80); // Key off bit
+            return;  // Assembly: bra.w mds_update_return
+        }
+
+        // Assembly (lines 3062-3068): vol update only if neither key_on nor key_off
         if ((t.t_note_flag & (1 << nf_vol)) != 0) {
             t.t_note_flag &= ~(1 << nf_vol);
-            int vol = t.t_vol; // Mds convert?
+            // Use mds_z80_get_vol for full volume calculation (assembly mds_z80_get_vol macro)
+            int vol = mds_z80_get_vol(a0, t);
             zram.write8(zPcmBase + MdDef.zp_vol, vol);
         }
     }
@@ -1833,16 +2157,19 @@ public class MdsDrv {
             } else {
                 // Standard FM Update
                 int fmPitch = mds_get_fm_pitch(t, pitch);
-                int high = fmPitch & 0xff;
-                int low = (fmPitch >> 8) & 0xff;
-    
+                // Assembly (lines 2578-2584): move.b d0,1(zram) writes to 0xA4 (high byte)
+                // then ror.w #8,d0 swaps, move.b d0,1(zram) writes to 0xA0 (low byte)
+                // So: 0xA4 gets LOW byte of result, 0xA0 gets HIGH byte of result
+                int low = fmPitch & 0xff;           // For 0xA4 (block/fnum high)
+                int high = (fmPitch >> 8) & 0xff;   // For 0xA0 (fnum low)
+
                 if (part == 0) {
-                    write_fm_port0(0xA4 + ch, high);
-                    write_fm_port0(0xA0 + ch, low);
+                    write_fm_port0(0xA4 + ch, low);   // Was: high (WRONG)
+                    write_fm_port0(0xA0 + ch, high);  // Was: low (WRONG)
                 } else {
                     // Assembly: and.w chnid,d1 (lines 2572) - use port-relative offset
-                    write_fm_port1(0xA4 + (ch % 3), high);
-                    write_fm_port1(0xA0 + (ch % 3), low);
+                    write_fm_port1(0xA4 + (ch % 3), low);   // Was: high (WRONG)
+                    write_fm_port1(0xA0 + (ch % 3), high);  // Was: low (WRONG)
                 }
             }
         }
@@ -1859,39 +2186,77 @@ public class MdsDrv {
                 write_fm_port1(panReg, panLfo);
         }
 
+        // Assembly (lines 2610-2613): bclr #nf+nf_key_on,flag; beq @no_key_on
         if ((t.t_note_flag & (1 << nf_key_on)) != 0) {
             t.t_note_flag &= ~(1 << nf_key_on);
-            if ((t.t_note_flag & (1 << nf_slur)) == 0) {
+            // Assembly: bclr #nf+nf_slur,flag; bne @no_key_on
+            // bclr CLEARS the bit AND tests old value - must clear here too
+            boolean wasSlur = (t.t_note_flag & (1 << nf_slur)) != 0;
+            t.t_note_flag &= ~(1 << nf_slur);  // Clear slur flag (assembly bclr does this)
+            if (!wasSlur) {
                 t.t_channel_flag |= (1 << cf_key_on);
-                // Assembly (lines 2626-2628): operator mask + channel slot
-                // YM2612 key-on format: Bits 4-7 = operator mask, Bits 0-2 = channel
-                // Port 0 channels: 0, 1, 2 -> slots 0, 1, 2
-                // Port 1 channels: 0, 1, 2 -> slots 4, 5, 6 (add 4 for part 1)
-                int opMask = 0xF0;  // All 4 operators enabled
-                int slot = ch + (part * 4);  // ch is already 0-2 relative to port
+
+                // Assembly (lines 2616-2629): Read t_op_mask from track data
+                // move.b t_op_mask(twork),d0; not.b d0; ...
+                // add.b d0,d0; andi.b #$f0,d0; or.b chnid,d0
+                int opMask = t.t_op_mask & 0xFF;
+                opMask = (~opMask) & 0xFF;  // not.b d0
+
+                // Check FM3 special mode (assembly: bmi.s @no_fm3_key_on)
+                // If bit 7 is clear after NOT, we're NOT in FM3 special mode
+                if ((opMask & 0x80) == 0) {
+                    // Normal FM or FM3: merge with global FM3 mask
+                    opMask |= a0.w_fm3_mask;
+                    a0.w_fm3_mask = opMask;
+                }
+
+                // Assembly: add.b d0,d0; andi.b #$f0,d0; or.b chnid,d0
+                opMask = (opMask << 1) & 0xF0;
+                int slot = ch + (part * 4);  // ch is 0-2 relative to port
                 write_fm_port0(0x28, opMask | slot);
             }
         }
+
     }
 
     private void mds_fm6_update(WorkArea a0, TrackData t) {
-        // Check PCM1 enable flag (simplified: if PCM1 active, skip FM)
-        if ((a0.w_pcm_mode & (1 << MdDef.pe_pcm1)) != 0) {
+        // Assembly (lines 2444-2454):
+        // btst #cf+cf_pcm_control,flag   - Check if PCM control is enabled for THIS track
+        // bne.w mds_pcm1_update          - If so, go to PCM update
+        // tst.b w_pcm_mode(work)         - Check w_pcm_mode bit 7
+        // bpl.s mds_fm1_update           - If clear (not in hardware PCM mode), do FM update
+
+        // Check if this track has PCM control enabled
+        if ((t.t_channel_flag & (1 << cf_pcm_control)) != 0) {
             mds_pcm1_update(a0, t);
-        } else {
-            mds_fm_update(a0, t, 2, 1);
+            return;
         }
+        
+        // Check w_pcm_mode bit 7 - if clear, do normal FM6 update
+        // If bit 7 is set, we may need to handle PCM-to-FM transition
+        if ((a0.w_pcm_mode & 0x80) != 0) {
+            // Was in PCM mode, now switching to FM - clear PCM flag
+            a0.w_pcm_mode &= ~(1 << pe_pcm1);
+            // Send PCM key off via Z80 (simplified - just clear the flag)
+        }
+        
+        // Do normal FM update for channel 6 (part 1, ch 2)
+        mds_fm_update(a0, t, 2, 1);
     }
+
 
     private void mds_fm3_update_pitch(WorkArea a0, TrackData t) {
         int pitch = t.t_last_pitch;
         int fmPitch = mds_get_fm_pitch(t, pitch);
-        
-        int datA4 = fmPitch & 0xff;        
-        int datA0 = (fmPitch >> 8) & 0xff;
-        
+
+        // Assembly @write_one (lines 2156-2171): writes d0 to high register (0xAD/AE/AC/A6)
+        // then ror.w #8, writes d0 to low register (0xA9/AA/A8/A2)
+        // Same byte swap pattern as normal FM pitch
+        int datA4 = fmPitch & 0xff;           // For high registers (0xAD/AE/AC/A6)
+        int datA0 = (fmPitch >> 8) & 0xff;    // For low registers (0xA9/AA/A8/A2)
+
         int mask = t.t_op_mask & a0.w_fm3_mask;
-        
+
         // Op 1 (AD/A9) - Bit 3
         if ((mask & 0x08) == 0) {
             write_fm_port0(0xAD, datA4);
@@ -2224,13 +2589,17 @@ public class MdsDrv {
         
         t.t_last_pitch = pitch; // Store NoteCode
 
-        // Now convert logic
-        if (noiseReset && nmode != 0) {
+        // Assembly @noise_reset: After falling through (pitch changed) or jumping here,
+        // just check nmode - NOT noiseReset. The condition was wrong before.
+        // Assembly lines 2946-2949:
+        //   @noise_reset:
+        //     tst.b d1           ; test nmode (low byte)
+        //     beq.s @no_psg3_control
+        //     move.b d1,sound_psg
+        //     bra.s mds_psg_update_pitch
+        if (nmode != 0) {
              // Explicit Noise Mode Set
              getPsgMemory().write8(MdDef.sound_psg, nmode & 0xff);
-             // Assembly jumps to mds_psg_update_pitch which calculates Freq but writes garbage data (ignored).
-             // So we just stop here (after updating last_pitch/calculating freq if needed?).
-             // We don't need to calculate Freq since we don't use it.
              return;
         }
 
@@ -2245,7 +2614,7 @@ public class MdsDrv {
         // My trace "27392" (0x6B00) is NoteCode. 0x6B (107).
         // 0x6B & 7 = 3. 0xE3.
         // So this logic works on NoteCode.
-        
+
         // Java: pitch is NoteCode.
         int val = ((pitch >> 8) & 0x07) | 0xE0;
         getPsgMemory().write8(MdDef.sound_psg, val);
@@ -2277,9 +2646,6 @@ public class MdsDrv {
         // Detune is a SIGNED byte - sign extend it (assembly uses ext.w)
         int dtn = (byte) t.t_dtn;  // Cast to byte for sign extension
         int pitch = (note << 8) + dtn;
-        if (t.t_channel_id == 6 && debugCounter < 100) { // Ch6 = PSG Ch0
-             // System.out.printf("PitchUpdate: Note=%d Trs=%d Dtn=%d RawPitch=%d%n", note, t.t_trs, dtn, pitch);
-        }
 
         // Portamento update (Assembly lines 1997-2028)
         int current = t.t_pitch;
@@ -2550,19 +2916,16 @@ public class MdsDrv {
 
         Memory tbase = sdtop.add(t.t_base_addr);
         int insIdx = t.t_ins;
+
         int insOffset = tbase.read16(insIdx * 2);
         if ((insOffset & 0x8000) != 0)
-            insOffset |= 0xFFFF0000;
-
-        if (insOffset < 0 || insOffset >= 0x8000) {
-            return;
-        }
+            insOffset |= 0xFFFF0000;  // Sign-extend for negative offsets
 
         Memory insData;
         if (a0.globInstruments != null && a0.globInstruments.containsKey(t.t_ins)) {
-             insData = new ByteArrayMemory(a0.globInstruments.get(t.t_ins));
+            insData = new ByteArrayMemory(a0.globInstruments.get(t.t_ins));
         } else {
-             insData = sdtop.add(insOffset);
+            insData = sdtop.add(insOffset);
         }
 
         // Mute channel
@@ -2576,13 +2939,17 @@ public class MdsDrv {
         }
 
         // Upload instrument registers
+        // Upload instrument registers
         // Correct Layout from Assembly cmd_ins:
-        // 24 bytes of Register Data (0-23)
+        // 24 bytes of Register Data (0-23) -> Regs 30, 50, 60, 70, 80, 90
         // 4 bytes of TL (24-27)
         // 1 byte Alg (28)
         // 1 byte Trs (29)
         final int[] regBases = { 0x30, 0x50, 0x60, 0x70, 0x80, 0x90 };
         int dataPtr = 0; // Start at 0
+
+        StringBuilder envLog = new StringBuilder();
+        envLog.append(String.format("FM INS CH%d part%d idx=%d: ", ch, part, insIdx));
 
         for (int r = 0; r < 6; r++) {
             int regBase = regBases[r];
@@ -2596,15 +2963,52 @@ public class MdsDrv {
                     write_fm_port1(regAddr, val);
             }
         }
-        
-        // dataPtr is now 24. 
-        // TL is at 24-27 (read in execute_command or other places, or used here?)
-        // Java reads mds_fm_update_vol separately?
-        // Assembly checks Alg here:
-        // move.b (tmpa1)+,1(zram,chnid) ... for Alg. 
-        // Where is Alg? dataPtr + 4 (skip TL).
-        
-        int algo = insData.read8(dataPtr + 4); // 24 + 4 = 28
+
+        // Log envelope parameters: AR(bytes 4-7), DR(bytes 8-11), SR(bytes 12-15), RR/SL(bytes 16-19)
+        envLog.append("AR=");
+        for (int op = 0; op < 4; op++) {
+            if (op > 0) envLog.append(",");
+            envLog.append(String.format("%02X", insData.read8(4 + op) & 0x1f));
+        }
+        envLog.append(" DR=");
+        for (int op = 0; op < 4; op++) {
+            if (op > 0) envLog.append(",");
+            envLog.append(String.format("%02X", insData.read8(8 + op) & 0x1f));
+        }
+        envLog.append(" SR=");
+        for (int op = 0; op < 4; op++) {
+            if (op > 0) envLog.append(",");
+            envLog.append(String.format("%02X", insData.read8(12 + op) & 0x1f));
+        }
+        envLog.append(" SL/RR=");
+        for (int op = 0; op < 4; op++) {
+            if (op > 0) envLog.append(",");
+            int slrr = insData.read8(16 + op) & 0xff;
+            int sl = (slrr >> 4) & 0x0f;
+            int rr = slrr & 0x0f;
+            envLog.append(String.format("%X/%X", sl, rr));
+        }
+        envLog.append(" TL=");
+        for (int op = 0; op < 4; op++) {
+            if (op > 0) envLog.append(",");
+            envLog.append(String.format("%02X", insData.read8(24 + op) & 0x7f));
+        }
+        System.out.println(envLog.toString());
+
+        // dataPtr is now 24.
+        // Store TL values for volume calculations (bytes 24-27)
+        t.t_fm_tl[0] = insData.read8(dataPtr + 0) & 0x7f;
+        t.t_fm_tl[1] = insData.read8(dataPtr + 1) & 0x7f;
+        t.t_fm_tl[2] = insData.read8(dataPtr + 2) & 0x7f;
+        t.t_fm_tl[3] = insData.read8(dataPtr + 3) & 0x7f;
+
+        // Read and store algorithm/feedback (byte 28)
+        int algo = insData.read8(dataPtr + 4) & 0xff; // 24 + 4 = 28
+        t.t_fm_alg = algo;  // Store full algo+fb (vol update masks with 0x07)
+
+        // Read Transpose (byte 29) - ignored by assembly usually? Or stored?
+        // t.t_ins_trs = insData.read8(dataPtr + 5);
+
         int fbAlgoReg = 0xB0 + ch;
         if (part == 0)
             write_fm_port0(fbAlgoReg, algo);
@@ -2613,14 +3017,15 @@ public class MdsDrv {
     }
 
     private void mds_fm_update_vol(WorkArea a0, TrackData t, int ch, int part) {
-        // This must match the assembly logic:
-        // 1. Read base TL values from t_fm_tl[0..3]
-        // 2. For CARRIER operators only (determined by algorithm), add volume offset
-        // 3. Modulator operators keep their original TL
-        
+        // Assembly mds_fm_update_vol (lines 2263-2311) and mds_fm3_update_vol (lines 2330-2370)
+        // 1. FM3 special mode (t_op_mask bit 7 set) uses GLOBAL w_fm3_tl[] and w_fm3_alg
+        // 2. Normal FM uses track-specific t_fm_tl[] and t_fm_alg
+        // 3. For CARRIER operators only (determined by algorithm), add volume offset
+        // 4. Modulator operators keep their original TL
+
         int vol = t.t_vol & 0xff;
         int volOffset;
-        
+
         // Check if using volume table (bit 7 set)
         if ((vol & 0x80) != 0) {
             if (vol >= 0x90) vol = 0x8f;  // Clamp
@@ -2628,26 +3033,42 @@ public class MdsDrv {
         } else {
             volOffset = vol;
         }
-        
+
         // Add global volume
         if (t.t_request_id < RCOUNT * 2) {
             volOffset += (a0.w_volume[t.t_request_id >> 1] >> 8) & 0xff;
         }
-        
-        int alg = t.t_fm_alg & 0x07;
+
+        // Check if FM3 special mode (assembly line 2264-2265)
+        boolean isFm3SpecialMode = (t.t_op_mask & 0x80) != 0;
+
+        // Select TL source and algorithm based on mode
+        int[] tlSource;
+        int alg;
+        if (isFm3SpecialMode) {
+            // Assembly (line 2267): lea 4+w_fm3_tl(work),tmpa1 - use GLOBAL values
+            tlSource = a0.w_fm3_tl;
+            // Assembly (line 2280): move.b w_fm3_alg-1(work),d4
+            alg = a0.w_fm3_alg & 0x07;
+        } else {
+            // Normal FM - use track-specific values
+            tlSource = t.t_fm_tl;
+            alg = t.t_fm_alg & 0x07;
+        }
+
         int carrierThreshold = mds_fm_op_table[alg];  // Operators >= this are carriers
-        
+
         // Operator order: 3, 2, 1, 0 (assembly does -(tmpa1) starting from end)
         // Register order: 0x4C, 0x48, 0x44, 0x40 (subq.b #4)
         int[] opRegs = {0x4C, 0x48, 0x44, 0x40};  // OP4, OP3, OP2, OP1 TL registers
         int[] opOrder = {3, 2, 1, 0};  // Match assembly order
-        
+
         for (int i = 0; i < 4; i++) {
             int opIdx = opOrder[i];
-            int baseTL = t.t_fm_tl[opIdx] & 0x7f;  // Base TL from instrument
+            int baseTL = tlSource[opIdx] & 0x7f;  // Base TL from correct source
             int finalTL;
-            
-            // Check if this operator is a carrier
+
+            // Check if this operator is a carrier (assembly: cmp.b mds_fm_op_table(pc,d4),d2; bcs @modulator)
             if (opIdx >= carrierThreshold) {
                 // Carrier: add volume offset with overflow check
                 finalTL = baseTL + volOffset;
@@ -2656,7 +3077,7 @@ public class MdsDrv {
                 // Modulator: keep original TL
                 finalTL = baseTL;
             }
-            
+
             // Assembly: and.b d2,d1; add.b #$4c,d1 (lines 2283-2285) - port-relative
             int reg = opRegs[i] + (ch % 3);
             if (part == 0)
@@ -2667,6 +3088,9 @@ public class MdsDrv {
     }
 
     // Tables
+    private static final byte[] mds_fm_op_table = { 3, 3, 3, 3, 2, 1, 1, 0 };
+    private static final byte[] mds_fm_vol_table = { 42, 40, 37, 34, 32, 29, 26, 24, 21, 18, 16, 13, 10, 8, 5, 2 };
+
     private static final int[] mds_fm_freq_tab = {
             161, 171, 181, 191, 203, 215, 228, 241, 255, 271, 287, 304,
             322, 341, 361, 383, 406, 430, 455, 482, 511, 541, 574, 608,
@@ -2728,9 +3152,6 @@ public class MdsDrv {
             mds_octave_table[120 + i] = 80;
     }
 
-    private static final byte[] mds_fm_op_table = { 3, 3, 3, 3, 2, 1, 1, 0 };
-    private static final byte[] mds_fm_vol_table = { 42, 40, 37, 34, 32, 29, 26, 24, 21, 18, 16, 13, 10, 8, 5, 2 };
-
     // PSG Volume Table (approximate from ASM or converted)
     // ASM: dcb.b 2,$8f; ... various runs.
     // I will use a simplified table or the exact one if I expand it.
@@ -2763,6 +3184,46 @@ public class MdsDrv {
         if (vol >= mds_psg_vol_table_raw.length)
             vol = mds_psg_vol_table_raw.length - 1;
         return mds_psg_vol_table_raw[vol];
+    }
+
+    /**
+     * Calculate PCM volume for Z80 - equivalent to assembly's mds_z80_get_vol macro.
+     * Assembly reference: mdssub.inc:85-98
+     */
+    private int mds_z80_get_vol(WorkArea a0, TrackData t) {
+        int d1 = t.t_vol & 0xff;
+
+        // Step 1: Table lookup if bit 7 NOT set
+        // Assembly: bmi.s @no_conversion; bsr.w mds_pcm_convert_vol
+        if ((d1 & 0x80) == 0) {
+            d1 = mds_psg_vol_table_raw[Math.min(d1, mds_psg_vol_table_raw.length - 1)] & 0xff;
+        }
+
+        // Step 2: Subtract master volume (from w_volume, using request_id)
+        // Assembly: sub.b 1+w_volume(work,rnum),d1
+        // Note: t_request_id is stored as rnum*2 (byte offset 0,2,4,6), so divide by 2 for array index
+        // Assembly uses 1+w_volume offset to get the LOW byte of the word
+        int rnumIdx = t.t_request_id >> 1;
+        if (rnumIdx >= 0 && rnumIdx < RCOUNT) {
+            int masterVol = a0.w_volume[rnumIdx] & 0xff;
+            d1 = (d1 - masterVol) & 0xff;
+        }
+
+        // Step 3: Clamp to 0 if negative (signed comparison)
+        // Assembly: bmi.s @no_clamp; clr.b d1
+        if ((d1 & 0x80) != 0) {
+            d1 = 0;
+        }
+
+        // Step 4: Bitwise NOT
+        // Assembly: not.b d1
+        d1 = (~d1) & 0xff;
+
+        // Step 5: Mask to 4 bits and add 15
+        // Assembly: moveq #15,d2; and.b d2,d1; add.b d2,d1
+        d1 = (d1 & 0x0f) + 15;
+
+        return d1;
     }
 
     private Memory parseRiffMds(WorkArea a0, Memory m) {
@@ -2823,19 +3284,67 @@ public class MdsDrv {
                         if (sc0 == 'g' && sc1 == 'l' && sc2 == 'o' && sc3 == 'b') {
                             int globIndex = (m.read8(lp+8) & 0xff) | ((m.read8(lp+9) & 0xff) << 8);
                             // Store data (30 bytes?)
-                            // Header 8 bytes + Index 4 bytes?  Test: data starts at lp+12.
-                            int dataSize = subSize - 4; // Index is 4 bytes?
+                            // "glob" header layout:
+                            // +0-3: "glob"
+                            // +4-5: subSize (16-bit LE) = total size INCLUDING "glob"+size fields
+                            // +6-7: reserved/unknown
+                            // +8-9: globIndex (16-bit LE)
+                            // +10-11: reserved/unknown
+                            // +12+: instrument data (30 bytes)
+                            int dataSize = subSize - 4; // Assembly: reads starting at offset +12 from glob keyword
                             byte[] data = new byte[dataSize];
                             for (int i=0; i<dataSize; i++) {
                                 data[i] = (byte)m.read8(lp + 12 + i);
                             }
                             a0.globInstruments.put(globIndex, data);
+                            // Debug dump first 30 bytes
+                            StringBuilder sb = new StringBuilder(String.format("Glob %d @ offset 0x%04X stored: ", globIndex, lp + 12));
+                            for (int i=0; i<Math.min(30, data.length); i++) sb.append(String.format("%02X ", data[i] & 0xff));
+                            System.err.println(sb.toString());
                             logger.log(Level.WARNING, "Parsed glob index " + globIndex);
+                        }
+                        // "pcmh" = 0x70 0x63 0x6D 0x68
+                        else if (sc0 == 'p' && sc1 == 'c' && sc2 == 'm' && sc3 == 'h') {
+                            // Read 32-bit LE values
+                            // Index at +8
+                            int pcmIdx = (m.read8(lp+8) & 0xff) | ((m.read8(lp+9) & 0xff) << 8) | ((m.read8(lp+10) & 0xff) << 16) | ((m.read8(lp+11) & 0xff) << 24);
+                            // Position at +12
+                            int posVal = (m.read8(lp+12) & 0xff) | ((m.read8(lp+13) & 0xff) << 8) | ((m.read8(lp+14) & 0xff) << 16) | ((m.read8(lp+15) & 0xff) << 24);
+                            // Start at +16
+                            int startVal = (m.read8(lp+16) & 0xff) | ((m.read8(lp+17) & 0xff) << 8) | ((m.read8(lp+18) & 0xff) << 16) | ((m.read8(lp+19) & 0xff) << 24);
+                            // Size at +20
+                            int sizeVal = (m.read8(lp+20) & 0xff) | ((m.read8(lp+21) & 0xff) << 8) | ((m.read8(lp+22) & 0xff) << 16) | ((m.read8(lp+23) & 0xff) << 24);
+                            // Rate at +32
+                            int rateVal = (m.read8(lp+32) & 0xff); 
+                            if (rateVal == 0) rateVal = 4; // Default to 17.5kHz (approx) if unspecified
+                            
+                            // Construct Z80 Header (8 bytes Big Endian)
+                            // Format: [Rate, HighAddr, LowAddrH, LowAddrL, Len1, Len2, Len3, Len4]
+                            int addr = posVal + startVal;
+                            
+                            byte[] header = new byte[8];
+                            header[0] = (byte)rateVal; 
+                            header[1] = (byte)((addr >>> 16) & 0xff); 
+                            header[2] = (byte)((addr >>> 8) & 0xff); 
+                            header[3] = (byte)(addr & 0xff); 
+                            header[4] = (byte)((sizeVal >>> 24) & 0xff);
+                            header[5] = (byte)((sizeVal >>> 16) & 0xff);
+                            header[6] = (byte)((sizeVal >>> 8) & 0xff);
+                            header[7] = (byte)(sizeVal & 0xff);
+                            
+                            a0.pcmHeaders.put(pcmIdx, header);
+                            logger.log(Level.WARNING, String.format("Parsed pcmh idx=%d addr=%06X size=%04X rate=%d", pcmIdx, addr, sizeVal, rateVal));
                         }
                         
                         lp += 8 + subSize;
                         if ((subSize & 1) != 0) lp++;
                     }
+                }
+                // "pcmd" = 0x70 0x63 0x6D 0x64
+                else if (c0 == 'p' && c1 == 'c' && c2 == 'm' && c3 == 'd') {
+                    logger.log(Level.WARNING, "Found pcmd chunk at " + p + " size " + size);
+                    // Store in w_pcm_ptr
+                    a0.w_pcm_ptr = m.add(p + 8);
                 }
                 
                 if ((size & 1) != 0) size++;
