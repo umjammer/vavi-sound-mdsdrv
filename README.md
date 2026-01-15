@@ -5,7 +5,7 @@
 
 # vavi-sound-mdsdrv
 
-<img alt="logo" src="src/test/resources/duke_ewi.png" width="160" />
+<img alt="logo" src="src/test/resources/duke_synthe.png" width="160" />
 
 🎹 Java version of MDSDRV.
 
@@ -17,14 +17,17 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 
 ## Usage
 
+* [sample](src/test/java/vavi/sound/mdsdrv/MdsPlayerTest.java)
 
 ## References
 
-* 
+* https://github.com/uniskie/msx_music_data/tree/master/Mus-MGSDRV (.mds)
+* https://github.com/superctr/ctrmml (mml to .mds)
 
 ## TODO
 
 * compiler
+* pcm
 
 ---
 
@@ -173,3 +176,7 @@ this repository has been compiled from the source code in the
 - Yuzo Koshiro: For creating the MUCOM88 driver which was an
 	inspiration to this project.
 - All beta testers.
+
+---
+
+<sub>image designed by @umjammer, drawn by nano banana</sub>

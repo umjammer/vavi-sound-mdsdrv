@@ -10,3 +10,8 @@ sgdk.bin
 *~
 *.swp
 tmp/
+/local.properties
+GEMINI.md
+CLAUDE.md
+settings.local.json
+jazzy_nyc_99.mds
