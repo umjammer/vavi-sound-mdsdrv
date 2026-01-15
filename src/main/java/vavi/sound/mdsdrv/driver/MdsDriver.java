@@ -3,6 +3,7 @@ package vavi.sound.mdsdrv.driver;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -24,11 +25,12 @@ public class MdsDriver extends MdsDrv implements IDriver {
     private static final Logger logger = getLogger(MdsDriver.class.getName());
 
     private WorkArea workArea;
-    private Memory memory;
 
     // Chip write callbacks from IDriver consumers
     private Consumer<ChipDatum> writeOPNA; // Primary FM (YM2612 treated as OPNA/B/compat)
     private Consumer<ChipDatum> writePSG; // SN76489
+    private Consumer<ChipDatum> writePCM; // PCM
+    Consumer<Function<Integer, Integer>> workReader;
 
     @Override
     public void init(List<ChipAction> chipsConsumer, MmlDatum[] srcBuf,
@@ -39,6 +41,16 @@ public class MdsDriver extends MdsDrv implements IDriver {
                 this.writePSG = chipsConsumer.get(1)::writeRegister;
 logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.writePSG);
             }
+            if (chipsConsumer.size() > 2) {
+                this.writePCM = chipsConsumer.get(2)::writeRegister;
+logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePCM set: " + this.writePCM);
+            }
+        }
+        if (additionalOption != null && additionalOption.length > 1 && additionalOption[1] instanceof Consumer workReader) {
+            this.workReader = workReader;
+logger.log(Level.INFO, "workReader: " + workReader);
+        } else {
+logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
         }
 
         // Convert MmlDatum[] to byte array for Memory
@@ -83,7 +95,7 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
             }
         }
 
-        this.memory = new ByteArrayMemory(data, 0);
+        Memory memory = new ByteArrayMemory(data, 0);
         this.workArea = new WorkArea();
 
         Memory pcmMemory = pcmData != null ? new ByteArrayMemory(pcmData) : null;
@@ -93,6 +105,8 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
         } else {
             logger.log(Level.DEBUG, "MdsDrv init success");
         }
+
+        this.workReader.accept(workArea.w_pcm_ptr::read8);
 
         // Start Request (Request 1 = Play) - Default behavior
         // The player typically calls startMusic, but mds_init might need to be ready.
@@ -139,39 +153,6 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
     protected void writeIo(int port, int data) {
         // Implement if MDSound allows IO hooking.
         // For now, ignore.
-    }
-
-    @Override
-    protected Memory getPsgMemory() {
-        return new PsgMemory(super.getPsgMemory());
-    }
-
-    private class PsgMemory implements Memory {
-        private final Memory wrapped;
-        
-        public PsgMemory(Memory wrapped) {
-            this.wrapped = wrapped;
-        }
-
-        @Override
-        public void write8(int addr, int data) {
-            if (addr == vavi.sound.mdsdrv.MdDef.sound_psg) {
-                if (writePSG != null) {
-//logger.log(Level.DEBUG, "write_psg: %02x, %02x".formatted(addr, data));
-                    writePSG.accept(new ChipDatum(0, 0, data)); // Port 0 assumed for PSG single port
-                }
-            } else {
-                wrapped.write8(addr, data);
-            }
-        }
-
-        // Delegation methods
-        @Override public int read8(int addr) { return wrapped.read8(addr); }
-        @Override public int read16(int addr) { return wrapped.read16(addr); }
-        @Override public int read32(int addr) { return wrapped.read32(addr); }
-        @Override public void write16(int addr, int data) { wrapped.write16(addr, data); }
-        @Override public void write32(int addr, int data) { wrapped.write32(addr, data); }
-        @Override public Memory add(int o) { return wrapped.add(o); }
     }
 
     private double samplesPerFrame = 735.0; // Default 44100 / 60
@@ -295,7 +276,9 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
         public int read16(int addr) {
             int pos = offset + addr;
             if (pos >= 0 && pos < data.length - 1) {
-                return ((data[pos] & 0xFF) << 8) | (data[pos + 1] & 0xFF);
+                int b1 = data[pos] & 0xFF;
+                int b2 = data[pos + 1] & 0xFF; // Big Endian (68k)
+                return (b1 << 8) | b2;
             }
             return 0;
         }
@@ -321,5 +304,44 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
         public Memory add(int o) {
             return new ByteArrayMemory(data, offset + o);
         }
+    }
+
+    @Override
+    protected Memory getZ80Ram() {
+        return new Memory() {
+            @Override
+            public void write8(int addr, int val) {
+                writePCM.accept(new ChipDatum(0, addr, val & 0xff));
+            }
+            @Override public int read8(int addr) {
+//                return pcm.read(addr); // TODO
+                return 0;
+            }
+            @Override public void write16(int addr, int val) { write8(addr, val >> 8); write8(addr+1, val & 0xFF); }
+            @Override public void write32(int addr, int val) { write16(addr, val >> 16); write16(addr+2, val & 0xFFFF); }
+            @Override public int read16(int addr) { return (read8(addr) << 8) | read8(addr+1); }
+            @Override public int read32(int addr) { return (read16(addr) << 16) | read16(addr+2); }
+            @Override public Memory add(int o) { return null; }
+        };
+    }
+
+    @Override
+    protected Memory getPsgMemory() {
+        final Memory wrapped = super.getPsgMemory();
+        return new Memory() {
+            @Override public void write8(int addr, int data) {
+                if (addr == 0xC00011) {
+                    // System.out.printf("PSG: %02x%n", data);
+                    writePSG.accept(new ChipDatum(0, 0, data)); // Port 0 assumed for PSG single port
+                }
+                else wrapped.write8(addr, data);
+            }
+            @Override public int read8(int addr) { return wrapped.read8(addr); }
+            @Override public int read16(int addr) { return wrapped.read16(addr); }
+            @Override public int read32(int addr) { return wrapped.read32(addr); }
+            @Override public void write16(int addr, int data) { wrapped.write16(addr, data); }
+            @Override public void write32(int addr, int data) { wrapped.write32(addr, data); }
+            @Override public Memory add(int o) { return wrapped.add(o); }
+        };
     }
 }
