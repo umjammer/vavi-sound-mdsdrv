@@ -215,7 +215,7 @@ public class MdsDrv {
         a0.w_sdtop = a1;
         
 
-        logger.log(Level.WARNING, "mds_init complete, sdtop=" + a1);
+        logger.log(Level.DEBUG, "mds_init complete, sdtop=" + a1);
 
         // ver = ((ver << 16) | (ver >>> 16));
 
@@ -3293,13 +3293,13 @@ public class MdsDrv {
                 // ID check
                 // "seq " = 0x73 0x65 0x71 0x20
                 if (c0 == 's' && c1 == 'e' && c2 == 'q' && c3 == ' ') {
-                    logger.log(Level.WARNING, "Found seq chunk at " + p + " size " + size);
+                    logger.log(Level.INFO, "Found seq chunk at " + p + " size " + size);
                     seqChunk = m.add(p + 8);
                 }
                 // "LIST" = 0x4C 0x49 0x53 0x54
                 else if (c0 == 'L' && c1 == 'I' && c2 == 'S' && c3 == 'T') {
                     // Parse LIST contents for glob
-                    logger.log(Level.WARNING, "Found LIST chunk at " + p + " size " + size);
+                    logger.log(Level.INFO, "Found LIST chunk at " + p + " size " + size);
                     int listEnd = p + 8 + size;
                     int lp = p + 8;
                     // LIST type (4 bytes) e.g. "dblk"
@@ -3337,8 +3337,7 @@ public class MdsDrv {
                             // Debug dump first 30 bytes
                             StringBuilder sb = new StringBuilder(String.format("Glob %d @ offset 0x%04X stored: ", globIndex, lp + 12));
                             for (int i=0; i<Math.min(30, data.length); i++) sb.append(String.format("%02X ", data[i] & 0xff));
-                            System.err.println(sb.toString());
-                            logger.log(Level.WARNING, "Parsed glob index " + globIndex);
+                            logger.log(Level.INFO, sb.toString());
                         }
                         // "pcmh" = 0x70 0x63 0x6D 0x68
                         else if (sc0 == 'p' && sc1 == 'c' && sc2 == 'm' && sc3 == 'h') {
@@ -3370,7 +3369,7 @@ public class MdsDrv {
                             header[7] = (byte)(sizeVal & 0xff);
                             
                             a0.pcmHeaders.put(pcmIdx, header);
-                            logger.log(Level.WARNING, String.format("Parsed pcmh idx=%d addr=%06X size=%04X rate=%d", pcmIdx, addr, sizeVal, rateVal));
+                            logger.log(Level.INFO, String.format("Parsed pcmh idx=%d addr=%06X size=%04X rate=%d", pcmIdx, addr, sizeVal, rateVal));
                         }
                         
                         lp += 8 + subSize;
@@ -3379,7 +3378,7 @@ public class MdsDrv {
                 }
                 // "pcmd" = 0x70 0x63 0x6D 0x64
                 else if (c0 == 'p' && c1 == 'c' && c2 == 'm' && c3 == 'd') {
-                    logger.log(Level.WARNING, "Found pcmd chunk at " + p + " size " + size);
+                    logger.log(Level.INFO, "Found pcmd chunk at " + p + " size " + size);
                     // Store in w_pcm_ptr
                     a0.w_pcm_ptr = m.add(p + 8);
                 }

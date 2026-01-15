@@ -8,13 +8,13 @@ import javax.sound.sampled.AudioSystem;
 import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 
-import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.Test;
-
 import vavi.sound.mdsdrv.MdsDrv.WorkArea;
 import vavi.util.Debug;
 import vavi.util.properties.annotation.Property;
 import vavi.util.properties.annotation.PropsEntity;
+
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import static vavi.sound.SoundUtil.volume;
 
@@ -96,7 +96,6 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                     size++;
                 p += 8 + size;
             }
-            
         }
 
         // Create root memory
@@ -126,8 +125,8 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
             double pos;
             double step;
         }
-        final PcmChannel[] pcmChannels = {new PcmChannel(), new PcmChannel(), new PcmChannel()};
-        final byte[] z80RamData = new byte[0x2000];
+        PcmChannel[] pcmChannels = {new PcmChannel(), new PcmChannel(), new PcmChannel()};
+        byte[] z80RamData = new byte[0x2000];
         
         WorkArea workArea = new WorkArea();
 
@@ -273,82 +272,84 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
 
         System.out.println("Rendering audio...");
         long start = System.currentTimeMillis();
-        
-            // Render loop (e.g. 10 seconds)
-            for (int frame = 0; frame < updateRate * time; frame++) {
-                driver.mds_update(workArea);
-                
-                // Clear buffers
-                mdsound.chips.Ym2612.clearBuffer(fmBuf, samplesPerStep);
-                for(int i=0; i<samplesPerStep; i++) {
-                     psgBuf[0][i] = 0;
-                     psgBuf[1][i] = 0;
-                }
-                
-                // Update Chips
-                if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipFm", "false")))
-                    fm.update(fmBuf, samplesPerStep);
-                if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPsg", "false")))
-                    psg.update(psgBuf, samplesPerStep);
-                
-                for (int i = 0; i < samplesPerStep; i++) {
-                    int pcmL = 0, pcmR = 0;
-                    
-                    for (PcmChannel pc : pcmChannels) {
-                        try {
-                            if (pc.active && workArea.w_pcm_ptr != null) {
-                                int posInt = (int)pc.pos;
 
-                                // Basic bounds check if possible, or rely on catch
-                                // ByteArrayMemory throws IndexOutOfBoundsException
-                                int sample = workArea.w_pcm_ptr.read8(pc.address + posInt);
+        // Render loop (e.g. 10 seconds)
+        for (int frame = 0; frame < updateRate * time; frame++) {
+            driver.mds_update(workArea);
 
-                                // Unsigned 8-bit (0..255) centered at 128
-                                int val = (sample & 0xFF) - 128;
+            // Clear buffers
+            mdsound.chips.Ym2612.clearBuffer(fmBuf, samplesPerStep);
+            for (int i = 0; i < samplesPerStep; i++) {
+                psgBuf[0][i] = 0;
+                psgBuf[1][i] = 0;
+            }
 
-                                // Read volume dynamically from z80RamData (it may be updated after key-on)
-                                int pcmBase = MdDef.z_pcm1;
-                                int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
+            // Update Chips
+            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipFm", "false")))
+                fm.update(fmBuf, samplesPerStep);
+            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPsg", "false")))
+                psg.update(psgBuf, samplesPerStep);
 
-                                // Apply volume from mds_z80_get_vol (range 15-31, where 31=loudest)
-                                // Scale: (volume - 15) / 16 gives 0.0 to 1.0
-                                // Then multiply by gain factor
-                                if (volume < 15) volume = 15;
-                                if (volume > 31) volume = 31;
-                                double volScale = (volume - 15) / 16.0;
-                                val = (int)(val * volScale * 64);  // Apply volume and gain
+            for (int i = 0; i < samplesPerStep; i++) {
+                int pcmL = 0, pcmR = 0;
 
+                for (PcmChannel pc : pcmChannels) {
+                    try {
+                        if (pc.active && workArea.w_pcm_ptr != null) {
+                            int posInt = (int) pc.pos;
+
+                            // Basic bounds check if possible, or rely on catch
+                            // ByteArrayMemory throws IndexOutOfBoundsException
+                            int sample = workArea.w_pcm_ptr.read8(pc.address + posInt);
+
+                            // Unsigned 8-bit (0..255) centered at 128
+                            int val = (sample & 0xFF) - 128;
+
+                            // Read volume dynamically from z80RamData (it may be updated after key-on)
+                            int pcmBase = MdDef.z_pcm1;
+                            int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
+
+                            // Apply volume from mds_z80_get_vol (range 15-31, where 31=loudest)
+                            // Scale: (volume - 15) / 16 gives 0.0 to 1.0
+                            // Then multiply by gain factor
+                            if (volume < 15) volume = 15;
+                            if (volume > 31) volume = 31;
+                            double volScale = (volume - 15) / 16.0;
+                            val = (int) (val * volScale * 64);  // Apply volume and gain
+
+                            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcm", "false"))) {
                                 pcmL += val;
                                 pcmR += val;
-
-                                pc.pos += pc.step;
-                                // Simple length check?
-                                // If we read 0x00 or 0x80 (silence), maybe fade out?
-                                // For now, let it run until exception or manual stop?
-                                // Usually PCM has a length count.
                             }
-                        } catch (Exception e) {
-                            pc.active = false; // Stop if error (End of buffer)
+
+                            pc.pos += pc.step;
+                            // Simple length check?
+                            // If we read 0x00 or 0x80 (silence), maybe fade out?
+                            // For now, let it run until exception or manual stop?
+                            // Usually PCM has a length count.
                         }
+                    } catch (Exception e) {
+                        pc.active = false; // Stop if error (End of buffer)
                     }
-                    
-                    int L = fmBuf[0][i] + psgBuf[0][i] + pcmL;
-                    int R = fmBuf[1][i] + psgBuf[1][i] + pcmR;
-                    
-                    // Clamp 16-bit
-                    L = Math.max(-32768, Math.min(32767, L));
-                    R = Math.max(-32768, Math.min(32767, R));
-                    
-                    mixBuf[i*4+0] = (byte)(L & 0xff);
-                    mixBuf[i*4+1] = (byte)((L >> 8) & 0xff);
-                    mixBuf[i*4+2] = (byte)(R & 0xff);
-                    mixBuf[i*4+3] = (byte)((R >> 8) & 0xff);
                 }
-                
-                if (line != null) {
-                    line.write(mixBuf, 0, mixBuf.length);
-                }
+
+                int L = fmBuf[0][i] + psgBuf[0][i] + pcmL;
+                int R = fmBuf[1][i] + psgBuf[1][i] + pcmR;
+
+                // Clamp 16-bit
+                L = Math.max(-32768, Math.min(32767, L));
+                R = Math.max(-32768, Math.min(32767, R));
+
+                mixBuf[i * 4 + 0] = (byte) (L & 0xff);
+                mixBuf[i * 4 + 1] = (byte) ((L >> 8) & 0xff);
+                mixBuf[i * 4 + 2] = (byte) (R & 0xff);
+                mixBuf[i * 4 + 3] = (byte) ((R >> 8) & 0xff);
             }
+
+            if (line != null) {
+                line.write(mixBuf, 0, mixBuf.length);
+            }
+        }
         
         if (line != null) {
             line.drain();
