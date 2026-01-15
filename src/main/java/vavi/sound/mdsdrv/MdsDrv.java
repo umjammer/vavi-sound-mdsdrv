@@ -838,6 +838,9 @@ public class MdsDrv {
 
             // Initialize track memory
             t.t_last_pitch = 0xffff;
+            // Assembly (line 802): move.w #$0030,t_ins(twork)
+            // 68000 is big-endian: high byte first, low byte second
+            // So: t_ins = 0x00, t_ins_trs = 0x30
             t.t_ins = 0;
             t.t_ins_trs = 0x30;  // Assembly: move.w #$0030,t_ins(twork) = ins:0, ins_trs:0x30
             t.t_note = 0;
@@ -1199,6 +1202,11 @@ public class MdsDrv {
                     twork.t_stack_pos = currentSp + 2;
                     try {
                         int subOffset = tbase.read16(note * 2) & 0xffff;
+                        // CRITICAL FIX: In assembly, @next_command advances @trackpos BEFORE reading
+                        // But in Java, we read pos THEN advance t_position
+                        // Since the loop already advanced t_position = pos + 1 above,
+                        // and we're about to read from pos on the next iteration,
+                        // we need to set t_position = subOffset so the next iteration reads from subOffset
                         twork.t_position = subOffset;
                     } catch (Exception e) {
                         System.err.println("DRUM MODE ERROR: " + e.getMessage());
@@ -1474,14 +1482,24 @@ public class MdsDrv {
                 twork.t_note_flag |= (1 << nf_key_off);
 
                 twork.t_channel_flag &= ~(1 << cf_pcm_control);
-                twork.t_note_flag |= (1 << nf_ins);
+                // NOTE: nf_ins flag set ONLY for FM channels (line 1544)
+                // Assembly line 1226 sets nf_ins only in FM block, not in PSG block
                 twork.t_last_pitch = 0xffff;
                 
                 Memory insData = null;
-                // Check glob
-                if (a0.globInstruments != null && a0.globInstruments.containsKey(twork.t_ins)) {
+
+                // Assembly (@cmd_ins line 1207): ALWAYS read from pointer table
+                // movea.w 0(@tbase,@cmd),tmpa0  where @cmd = t_ins*2
+                // For RIFF: tbase points to seq chunk, so this reads from seq start
+                // This is necessary to get correct t_ins_trs (transpose) value!
+
+                // Try glob first (RIFF only)
+                boolean isGlobInstrument = false;
+                if (a0.w_pointer_mode == 1 && a0.globInstruments != null && a0.globInstruments.containsKey(twork.t_ins)) {
                     insData = new ByteArrayMemory(a0.globInstruments.get(twork.t_ins));
+                    isGlobInstrument = true;
                 } else {
+                    // ALWAYS read from pointer table (matches assembly @cmd_ins logic exactly)
                     Memory sdtop = a0.w_sdtop;
                     if (sdtop != null) {
                         int insIdx = twork.t_ins;
@@ -1490,13 +1508,13 @@ public class MdsDrv {
                         insData = sdtop.add(ptrOffset);
                     }
                 }
-                
+
                 if (insData != null && twork.t_channel_id < 6) {
                     // FM Instrument Header Layout (Assembly @cmd_ins lines 1201-1228):
                     // +0-23: Register Data (Skipped here in sequence command)
                     // +24: TL (4 bytes) - bytes 24, 25, 26, 27
                     // +28: Alg (1 byte)
-                    // +29: Trs (1 byte)
+                    // +29: Trs (1 byte) - ONLY for binary format, NOT for glob chunks!
 
                     // Assembly (lines 1217-1225): FM3 special handling
                     // If channel 2 (FM3), load BOTH global (w_fm3_*) AND track-specific (t_fm_*) values
@@ -1517,29 +1535,24 @@ public class MdsDrv {
                     twork.t_fm_tl[2] = insData.read8(26) & 0x7f;
                     twork.t_fm_tl[3] = insData.read8(27) & 0x7f;
                     twork.t_fm_alg = insData.read8(28) & 0xff;
-                    twork.t_ins_trs = insData.read8(29) & 0xff;
-                } else if (insData != null) {
-                     // PSG Instrument
-                     // If using glob (insData is set), use it directly.
-                     // If standard, t_psg_eg_addr is set below.
-                     if (a0.globInstruments != null && a0.globInstruments.containsKey(twork.t_ins)) {
-                         twork.t_psg_env_data = insData;
-                         twork.t_psg_eg_addr = 0; // Use data from offset 0
-                    //     System.out.println("  -> Loaded PSG from GLOB");
-                     } else if (a0.w_sdtop != null) {
-                        twork.t_psg_env_data = null; // Use sdtop
-                        int insIdx = twork.t_ins;
-                        int ptrOffset = tbase.read16(insIdx * 2);
-                        if ((ptrOffset & 0x8000) != 0) ptrOffset |= 0xFFFF0000;
-                        twork.t_psg_eg_addr = ptrOffset;
-                    //    System.out.println("  -> Loaded PSG from Pointer: " + ptrOffset);
+                    // CRITICAL: Only load t_ins_trs from binary format, NOT from glob chunks
+                    // Glob chunks have a different data structure - byte 29 may not be transpose
+                    if (!isGlobInstrument) {
+                        // Assembly (line 1225): move.b (tmpa0)+,t_ins_trs(twork)
+                        // 68000 bytes are SIGNED. 0x8A = -118, not 138!
+                        // Must NOT mask with & 0xff, which would convert to unsigned
+                        twork.t_ins_trs = (byte) insData.read8(29);  // Sign-extend: 0x8A becomes -118
                     }
-                    twork.t_psg_eg_pos = 0xff;
-                    twork.t_psg_eg_delay = 0x0f;
-                    twork.t_note_flag |= (1 << nf_key_off);
-                    twork.t_note_flag &= ~(1 << nf_slur);
-                } else {
-                 //   System.out.println("  -> Instrument NOT FOUND!");
+                    // Assembly line 1226: bset #nf+nf_ins,flag - ONLY for FM channels
+                    twork.t_note_flag |= (1 << nf_ins);
+                } else if (insData != null) {
+                     // PSG Instrument - either from glob or pointer table
+                     twork.t_psg_env_data = insData;
+                     twork.t_psg_eg_addr = 0; // Use data from offset 0
+                     twork.t_psg_eg_pos = 0xff;
+                     twork.t_psg_eg_delay = 0x0f;
+                     twork.t_note_flag |= (1 << nf_key_off);
+                     twork.t_note_flag &= ~(1 << nf_slur);
                 }
                 return 2;
             case 0xE2: // Vol
@@ -2123,6 +2136,15 @@ public class MdsDrv {
         int chOffset = ch;
         int portOffset = part * 2;
 
+        // CRITICAL: Assembly processes nf_ins BEFORE nf_key_off (line 2263-2309)
+        // This ensures instrument parameters are loaded BEFORE the key-off
+        // Instrument loading must happen first so TL values are set correctly
+        if ((t.t_note_flag & (1 << nf_ins)) != 0) {
+            t.t_note_flag &= ~(1 << nf_ins);
+            mds_fm_update_ins(a0, t, ch, part);
+            t.t_note_flag |= (1 << nf_vol);
+        }
+
         if ((t.t_note_flag & (1 << nf_key_off)) != 0) {
             t.t_note_flag &= ~(1 << nf_key_off);
             if ((t.t_channel_flag & (1 << cf_key_on)) != 0) {
@@ -2130,12 +2152,6 @@ public class MdsDrv {
                 int keyOffSlot = ch + (part * 4);
                 write_fm_port0(0x28, keyOffSlot);
             }
-        }
-
-        if ((t.t_note_flag & (1 << nf_ins)) != 0) {
-            t.t_note_flag &= ~(1 << nf_ins);
-            mds_fm_update_ins(a0, t, ch, part);
-            t.t_note_flag |= (1 << nf_vol);
         }
 
         if ((t.t_note_flag & (1 << nf_vol)) != 0) {
@@ -2642,7 +2658,9 @@ public class MdsDrv {
 
     private int mds_pitch_update(WorkArea a0, TrackData t) {
         // Assembly (lines 1989-2028): Calculate base pitch from note + transpose + detune
-        int note = (t.t_note + t.t_trs) & 0xff;
+        // CRITICAL: t_trs is a SIGNED byte. Must sign-extend before using
+        int trs = (byte) t.t_trs;  // Cast to byte to sign-extend (0xF0 becomes -16, not 240)
+        int note = (t.t_note + trs) & 0xff;
         // Detune is a SIGNED byte - sign extend it (assembly uses ext.w)
         int dtn = (byte) t.t_dtn;  // Cast to byte for sign extension
         int pitch = (note << 8) + dtn;
@@ -2780,15 +2798,18 @@ public class MdsDrv {
         // move.l mds_fm_freq_tab(pc,d0),d3  ; load 2 consecutive words
         // ...interpolation...
         // add.b mds_octave_table-mds_note_table(tmpa1),d0 ; add octave
-        
+
         int note = (pitch >> 8) & 0xff;
         int frac = pitch & 0xff;
-        
+
         if (note >= 120) note = 119;
         
         // note_table contains byte offsets (0,2,4...22) into the freq table
         int noteIndex = mds_note_table[note] & 0xff;  // 0,2,4...22
-        int freqIndex = noteIndex + (t.t_ins_trs & 0xff);  // Add instrument transpose
+        // Assembly (line 1897): add.b t_ins_trs,d0 - SIGNED byte add!
+        // CRITICAL: t_ins_trs is a SIGNED byte. Must sign-extend before using as offset
+        int trs = (byte) t.t_ins_trs;  // Cast to byte to sign-extend (0xF0 becomes -16, not 240)
+        int freqIndex = noteIndex + trs;  // Add signed transpose
         freqIndex &= 0xff;  // Keep as byte
         
         // Assembly loads a LONG at freq_tab[freqIndex], getting two consecutive words
@@ -2817,7 +2838,7 @@ public class MdsDrv {
 
     private int mds_get_psg_pitch(TrackData t, int pitch) {
         int note = (pitch >> 8) & 0xff;
-        int fraction = pitch & 0xff; 
+        int fraction = pitch & 0xff;
         int freq = 0;
         if (note < mds_note_table.length) {
             int oct = mds_octave_table[note] / 8;
@@ -2917,16 +2938,23 @@ public class MdsDrv {
         Memory tbase = sdtop.add(t.t_base_addr);
         int insIdx = t.t_ins;
 
-        int insOffset = tbase.read16(insIdx * 2);
-        if ((insOffset & 0x8000) != 0)
-            insOffset |= 0xFFFF0000;  // Sign-extend for negative offsets
+        Memory insData = null;
 
-        Memory insData;
-        if (a0.globInstruments != null && a0.globInstruments.containsKey(t.t_ins)) {
+        // Assembly logic: ALWAYS read from pointer table
+        // Try glob first (RIFF only)
+        if (a0.w_pointer_mode == 1 && a0.globInstruments != null && a0.globInstruments.containsKey(t.t_ins)) {
             insData = new ByteArrayMemory(a0.globInstruments.get(t.t_ins));
         } else {
+            // ALWAYS read from pointer table (matches assembly logic)
+            int insOffset = tbase.read16(insIdx * 2);
+            if ((insOffset & 0x8000) != 0)
+                insOffset |= 0xFFFF0000;  // Sign-extend for negative offsets
             insData = sdtop.add(insOffset);
         }
+
+        // Skip if instrument not found
+        if (insData == null)
+            return;
 
         // Mute channel
         int tlReg = 0x40 + ch;
@@ -2938,7 +2966,6 @@ public class MdsDrv {
                 write_fm_port1(regAddr, 0x7f);
         }
 
-        // Upload instrument registers
         // Upload instrument registers
         // Correct Layout from Assembly cmd_ins:
         // 24 bytes of Register Data (0-23) -> Regs 30, 50, 60, 70, 80, 90
@@ -2963,6 +2990,17 @@ public class MdsDrv {
                     write_fm_port1(regAddr, val);
             }
         }
+
+        // Assembly lines 2226-2234: Write Feedback/Algorithm register (0xB0 + ch)
+        // This was missing from the Java code! Must write AFTER the envelope registers.
+        // dataPtr is now 24 after the main register loop.
+        // Offsets: 0-23 registers, 24-27 TL, 28 ALG, 29 TRS
+        int algReg = 0xB0 + ch;
+        int algValue = insData.read8(28) & 0xff;  // Read algorithm from offset 28
+        if (part == 0)
+            write_fm_port0(algReg, algValue);
+        else
+            write_fm_port1(algReg, algValue);
 
         // Log envelope parameters: AR(bytes 4-7), DR(bytes 8-11), SR(bytes 12-15), RR/SL(bytes 16-19)
         envLog.append("AR=");
@@ -3006,14 +3044,12 @@ public class MdsDrv {
         int algo = insData.read8(dataPtr + 4) & 0xff; // 24 + 4 = 28
         t.t_fm_alg = algo;  // Store full algo+fb (vol update masks with 0x07)
 
-        // Read Transpose (byte 29) - ignored by assembly usually? Or stored?
-        // t.t_ins_trs = insData.read8(dataPtr + 5);
-
-        int fbAlgoReg = 0xB0 + ch;
-        if (part == 0)
-            write_fm_port0(fbAlgoReg, algo);
-        else
-            write_fm_port1(fbAlgoReg, algo);
+        // NOTE: Do NOT load t_ins_trs here!
+        // The E1 command handler (line 1225 in assembly) already loads t_ins_trs from byte 29
+        // of the instrument data when the instrument is selected.
+        // mds_fm_update_ins is called later to upload registers, and should NOT overwrite t_ins_trs
+        // Overwriting it would corrupt the transpose value set by the E1 command,
+        // especially for drum notes which depend on the correct transpose value.
     }
 
     private void mds_fm_update_vol(WorkArea a0, TrackData t, int ch, int part) {
@@ -3283,15 +3319,16 @@ public class MdsDrv {
                         // "glob" = 0x67 0x6c 0x6f 0x62
                         if (sc0 == 'g' && sc1 == 'l' && sc2 == 'o' && sc3 == 'b') {
                             int globIndex = (m.read8(lp+8) & 0xff) | ((m.read8(lp+9) & 0xff) << 8);
-                            // Store data (30 bytes?)
+                            // Store data (30 bytes)
                             // "glob" header layout:
-                            // +0-3: "glob"
-                            // +4-5: subSize (16-bit LE) = total size INCLUDING "glob"+size fields
-                            // +6-7: reserved/unknown
-                            // +8-9: globIndex (16-bit LE)
-                            // +10-11: reserved/unknown
-                            // +12+: instrument data (30 bytes)
-                            int dataSize = subSize - 4; // Assembly: reads starting at offset +12 from glob keyword
+                            // +0-3: "glob" (4 bytes)
+                            // +4-5: subSize (2 bytes, 16-bit LE) = total size INCLUDING "glob"+size fields
+                            // +6-7: reserved (2 bytes)
+                            // +8-9: globIndex (2 bytes, 16-bit LE)
+                            // +10-11: reserved (2 bytes)
+                            // +12+: instrument data (30 bytes for FM instruments)
+                            // dataSize = subSize - 4 (subtract the "glob" ID which is 4 bytes)
+                            int dataSize = subSize - 4;
                             byte[] data = new byte[dataSize];
                             for (int i=0; i<dataSize; i++) {
                                 data[i] = (byte)m.read8(lp + 12 + i);
