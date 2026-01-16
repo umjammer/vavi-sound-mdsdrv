@@ -199,16 +199,23 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                                  int pitch = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_pitch] & 0xFF;
                                  int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
 
-                                 System.err.printf("PCM_KEYON: addr=%06X pitch=%d vol=%d%n", startAddr, pitch, volume);
+                                 // Calculate pitch divisor (same as assembly)
+                                 int pitchDiv = pitch;
+                                 pitchDiv = (pitchDiv * 2) & 0xFF;
+                                 pitchDiv = (pitchDiv * 2) & 0xFF;
+                                 // Note: w_pcm_mode is typically 2 for these test files, so the mode 3 check usually doesn't apply
+                                 // if (((w_pcm_mode & 0xF) - 3) == 0) {
+                                 //     pitchDiv = (pitchDiv + pitch) & 0xFF;
+                                 // }
+
+                                 System.err.printf("PCM_KEYON: addr=%06X pitch=%d vol=%d pitchDiv=%d%n", startAddr, pitch, volume, pitchDiv);
                                  pcmChannels[0].active = true;
                                  pcmChannels[0].address = startAddr;
                                  pcmChannels[0].volume = volume;
                                  pcmChannels[0].pos = 0;
                                  // Pitch to step conversion
-                                 // Pitch 92 (0x5C) -> 9200Hz?
-                                 // step = TargetFreq / SampleRate
                                  if (pitch == 0) pitch = 4;
-                                 double pcmFreq = pitch * 100.0;
+                                 double pcmFreq = pitch * 100.0;  // pitch=92 -> 9200 Hz
                                  pcmChannels[0].step = pcmFreq / 44100.0;
                              }
                         }
@@ -323,10 +330,6 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                             }
 
                             pc.pos += pc.step;
-                            // Simple length check?
-                            // If we read 0x00 or 0x80 (silence), maybe fade out?
-                            // For now, let it run until exception or manual stop?
-                            // Usually PCM has a length count.
                         }
                     } catch (Exception e) {
                         pc.active = false; // Stop if error (End of buffer)

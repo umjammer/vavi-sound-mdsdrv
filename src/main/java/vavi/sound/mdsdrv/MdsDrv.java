@@ -1682,10 +1682,9 @@ public class MdsDrv {
                         // Use parsed header
                         twork.t_pcm_header = -pcmIdx - 1;
                         byte[] header = a0.pcmHeaders.get(pcmIdx);
-                        // Header structure I built: [R, H, L, L, S1, S2, S3, S4].
-                        twork.t_pcm_pitch = header[0] & 0xff;
-                        // Length is bytes 4-7 (BE). Assembly uses word at +6?
-                        // Let's use lower 16 bits for now: S3|S4.
+                        // Header structure: [Pitch, HighAddr, MidAddr, LowAddr, Pad, Pad, LenH, LenL]
+                        twork.t_pcm_pitch = header[0] & 0xff;  // Rate/Pitch is at offset 0
+                        // Length is bytes 6-7 as 16-bit BE word (matching assembly move.w at +6)
                         twork.t_pcm_length = ((header[6] & 0xff) << 8) | (header[7] & 0xff);
                         
                         twork.t_channel_flag |= (1 << cf_pcm_control);
@@ -2028,14 +2027,15 @@ public class MdsDrv {
                         int idx = -t.t_pcm_header - 1;
                         if (a0.pcmHeaders.containsKey(idx)) {
                              byte[] header = a0.pcmHeaders.get(idx);
-                             // Read 32-bit BE (Rate, High, Low, Low) from header[]
+                             // Read 32-bit from header - assembly does: move.l (tmpa0),d1
+                             // Header format: [Rate, HighAddr, LowAddrH, LowAddrL, ...]
                              d1 = ((header[0] & 0xff) << 24) |
                                   ((header[1] & 0xff) << 16) |
                                   ((header[2] & 0xff) << 8) |
                                   (header[3] & 0xff);
                         } else {
                              // Fallback (e.g. Kick -1, or unknown)
-                             d1 = 0; 
+                             d1 = 0;
                         }
                     } else if (a0.w_sdtop != null) { 
                          Memory pcmHead = a0.w_sdtop.add(t.t_pcm_header);
@@ -2073,24 +2073,44 @@ public class MdsDrv {
                     zram.write8(zPcmBase + MdDef.zp_addr + 1, middleByte);
                     
                     // Pitch/Count Calculation (lines 3098+)
-                    int pitch = t.t_pcm_pitch;
+                    // CRITICAL: Assembly uses BYTE operations (add.b), NOT 32-bit arithmetic!
+                    // clr.w d1; move.b t_pcm_pitch(twork),d1  <- d1 = pitch as word
+                    // move.b d1,d3                            <- d3 = pitch (save original)
+                    // add.b d1,d1                             <- d1 *= 2 (BYTE op, wraps at 8 bits!)
+                    // add.b d1,d1                             <- d1 *= 2 again (BYTE op)
+                    // (now d1 = pitch*4, but wrapped to 8 bits)
+                    // moveq #15,d2; and.b w_pcm_mode(work),d2; subq.b #3,d2
+                    // bne.s @no_mode3
+                    // add.b d3,d1                             <- if mode==3: d1 += d3 (BYTE op)
+
+                    int pitch = t.t_pcm_pitch & 0xff;
                     if (pitch != 0) {
-                        int calcPitch = pitch * 4;
+                        int pitchDiv = pitch;
+                        int pitchOrig = pitch;
+
+                        // Emulate BYTE add operations (8-bit wrapping)
+                        pitchDiv = (pitchDiv * 2) & 0xff;  // add.b pitchDiv,pitchDiv
+                        pitchDiv = (pitchDiv * 2) & 0xff;  // add.b pitchDiv,pitchDiv again
+
+                        // Mode 3 check
                         if (((a0.w_pcm_mode & 0xF) - 3) == 0) { // Check mode 3
-                            calcPitch += pitch; // * 5
+                            pitchDiv = (pitchDiv + pitchOrig) & 0xff;  // add.b pitchOrig,pitchDiv (BYTE op, may wrap)
                         }
-                        
+
+                        int calcPitch = pitchDiv; // This is the actual pitch divisor
+
                         int len = t.t_pcm_length;
                         int count = 0;
                         if (calcPitch != 0) {
                             count = len / calcPitch; // divu.w d1,d2
                             count += 0x1ff;         // addi.w #$1ff,d2
                         }
-                        
+
                         // Write count (word)
                         zram.write16(zPcmBase + MdDef.zp_count, count);
-                        // Write pitch (byte)
-                        zram.write8(zPcmBase + MdDef.zp_pitch, pitch);
+                        // Write pitch (byte) - Write raw value directly like assembly does
+                        // Assembly line 3116: move.b d3,zp_pitch-zp_count(tmpa0) - d3 contains original pitch
+                        zram.write8(zPcmBase + MdDef.zp_pitch, pitchOrig);
                     }
                     
                     // For now, let's assume standard format and try to populate likely fields
@@ -3354,19 +3374,33 @@ public class MdsDrv {
                             int rateVal = (m.read8(lp+32) & 0xff); 
                             if (rateVal == 0) rateVal = 4; // Default to 17.5kHz (approx) if unspecified
                             
-                            // Construct Z80 Header (8 bytes Big Endian)
-                            // Format: [Rate, HighAddr, LowAddrH, LowAddrL, Len1, Len2, Len3, Len4]
+                            // Construct PCM Header (8 bytes, matching assembly struct)
                             int addr = posVal + startVal;
-                            
+
+                            // Header structure matching assembly expectations:
+                            // The assembly code in mds_pcm_update reads 4 bytes at offset 0 with move.l
+                            // For address calculation: add.l d1,d1; lsr.w d1; ori.w #$8000,d1
+                            //
+                            // The 4-byte value is constructed to match seq-based headers
+                            // When transformed, should produce the correct Z80 address
+                            //
+                            // For addr=0x002000, after: << 1, >> 1 (low word), | 0x8000
+                            // We get Z80 addr in the range 0x8000-0xFFFF
+                            //
+                            // Store address + pitch as 4 bytes in Big Endian format
+                            // The pitch byte at offset 0 is also read by @cmd_pcm
+                            // When the 4-byte value is read for address calculation, the pitch byte is in the high byte
+                            // and gets shifted out during the transformation (add.l, lsr.w)
                             byte[] header = new byte[8];
-                            header[0] = (byte)rateVal; 
-                            header[1] = (byte)((addr >>> 16) & 0xff); 
-                            header[2] = (byte)((addr >>> 8) & 0xff); 
-                            header[3] = (byte)(addr & 0xff); 
-                            header[4] = (byte)((sizeVal >>> 24) & 0xff);
-                            header[5] = (byte)((sizeVal >>> 16) & 0xff);
-                            header[6] = (byte)((sizeVal >>> 8) & 0xff);
-                            header[7] = (byte)(sizeVal & 0xff);
+                            header[0] = (byte)rateVal;                  // Pitch/Rate at offset 0
+                            header[1] = (byte)((addr >>> 16) & 0xff);  // High byte of address
+                            header[2] = (byte)((addr >>> 8) & 0xff);   // Mid byte
+                            header[3] = (byte)(addr & 0xff);           // Low byte of address
+                            header[4] = 0;  // Padding
+                            header[5] = 0;  // Padding
+                            // Length as 16-bit word at offset 6-7 (for assembly move.w after addq #6)
+                            header[6] = (byte)((sizeVal >>> 8) & 0xff);  // High byte of length
+                            header[7] = (byte)(sizeVal & 0xff);          // Low byte of length
                             
                             a0.pcmHeaders.put(pcmIdx, header);
                             logger.log(Level.INFO, String.format("Parsed pcmh idx=%d addr=%06X size=%04X rate=%d", pcmIdx, addr, sizeVal, rateVal));

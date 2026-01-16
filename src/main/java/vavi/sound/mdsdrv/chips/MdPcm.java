@@ -74,10 +74,10 @@ logger.log(Level.INFO, "set work reader");
                 pcmChannels[0].volume = volume;
                 pcmChannels[0].pos = 0;
                 // Pitch to step conversion
-                // Pitch 92 (0x5C) -> 9200Hz?
-                // step = TargetFreq / SampleRate
-                if (pitch == 0) pitch = 4;
-                double pcmFreq = pitch * 100.0;
+                // Pitch value from RIFF header (e.g., 92) determines playback rate
+                // Formula: PCM frequency = pitch * 100 Hz (empirical from test code)
+                if (pitch == 0) pitch = 4;  // Default if not set
+                double pcmFreq = pitch * 100.0;  // e.g., pitch=92 -> 9200 Hz
                 pcmChannels[0].step = pcmFreq / 44100.0;
             }
         }
@@ -128,10 +128,6 @@ logger.log(Level.ERROR, e.getMessage(), e);
                 }
 
                 pc.pos += pc.step;
-                // Simple length check?
-                // If we read 0x00 or 0x80 (silence), maybe fade out?
-                // For now, let it run until exception or manual stop?
-                // Usually PCM has a length count.
             }
         }
     }
