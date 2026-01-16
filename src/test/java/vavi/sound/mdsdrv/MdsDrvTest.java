@@ -3,6 +3,7 @@ package vavi.sound.mdsdrv;
 import org.junit.jupiter.api.Test;
 import static org.junit.jupiter.api.Assertions.*;
 
+
 public class MdsDrvTest {
 
     static class MockMemory implements Memory {

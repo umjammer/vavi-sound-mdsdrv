@@ -8,6 +8,7 @@ import java.lang.System.Logger.Level;
 
 import static java.lang.System.getLogger;
 
+
 /**
  * MDSDRV - Mega Drive 68K Sound Driver
  * <p>
@@ -288,7 +289,7 @@ public class MdsDrv {
 
         writeIo(MdDef.z80_reset, 0x000);
         for (int i = 0; i < 20; i++)
-            ;
+            Thread.yield();
         writeIo(MdDef.z80_reset, 0x100);
 
         writeIo(MdDef.z80_bus_request, 0);
@@ -710,7 +711,7 @@ public class MdsDrv {
             // Debug: track when seq_step is 0 (would prevent counter decrement)
             if (seq_step == 0 && twork.t_counter > 0 && twork.t_channel_id >= 8) {
                 // Debug for PSG channels (channel_id 8, 9, 10, 11)
-                // System.out.printf("SEQ_STEP_ZERO: ch=%d rnum=%d counter=%d%n", 
+                // logger.log(Level.TRACE, "SEQ_STEP_ZERO: ch=%d rnum=%d counter=%d%n", 
                 //     twork.t_channel_id, real_rnum, twork.t_counter);
             }
 
@@ -808,7 +809,7 @@ public class MdsDrv {
         // a0.w_volume[rnum] = (vol << 8) | (reqdata & 0xff);
         // Fix: Do not add Song Index (reqdata) to Volume. User log expects pure volume.
         a0.w_volume[rnum] = (vol << 8);
-        // System.out.printf("mds_request: rnum=%d reqdata=%d vol=%d w_volume=%04x%n", rnum, reqdata, vol, a0.w_volume[rnum]);
+        // logger.log(Level.TRACE, "mds_request: rnum=%d reqdata=%d vol=%d w_volume=%04x%n", rnum, reqdata, vol, a0.w_volume[rnum]);
 
         int tcount = header.read8(0);
         header = header.add(1);
@@ -2341,7 +2342,7 @@ public class MdsDrv {
         // if (currentNote == t.t_debug_last_note) {
         //     t.t_debug_note_frames++;
         //     if (t.t_debug_note_frames == 31) {
-        //         System.out.printf("LONG_NOTE: Ch%d Note=%d held for >30 frames, counter=%d, position=%d%n",
+        //         logger.log(Level.TRACE, "LONG_NOTE: Ch%d Note=%d held for >30 frames, counter=%d, position=%d%n",
         //             t.t_channel_id, currentNote, t.t_counter, t.t_position);
         //     }
         // } else {
@@ -2582,7 +2583,7 @@ public class MdsDrv {
         // Add global volume (low byte from w_volume)
         if (t.t_request_id < RCOUNT * 2) {
             int globalVol = a0.w_volume[t.t_request_id >> 1] & 0xff;
-            // if (chVal == 128 && globalVol != 0) System.out.println("Global Vol Add: " + globalVol);
+            // if (chVal == 128 && globalVol != 0) logger.log(Level.TRACE, "Global Vol Add: " + globalVol);
             finalVol += globalVol;
         }
 
@@ -2590,10 +2591,10 @@ public class MdsDrv {
         if (finalVol > 15) finalVol = 15;
         
         // if (chVal == 128 && debugCounter < 100)
-        //     System.out.printf("writePsgVolume: Ch:%d tVol:%02x trkVol:%d envVol:%d finalVol:%d%n", chVal, tVol, trackVol, envVol, finalVol);
+        //     logger.log(Level.TRACE, "writePsgVolume: Ch:%d tVol:%02x trkVol:%d envVol:%d finalVol:%d%n", chVal, tVol, trackVol, envVol, finalVol);
         
         // Write to PSG (chVal | 0x10 = volume command for channel)
-        // if (chVal == 128 && debugCounter < 100) System.out.println("PSG Write: " + Integer.toHexString(chVal | 0x10 | finalVol));
+        // if (chVal == 128 && debugCounter < 100) logger.log(Level.TRACE, "PSG Write: " + Integer.toHexString(chVal | 0x10 | finalVol));
         psg.write8(MdDef.sound_psg, chVal | 0x10 | finalVol);
     }
 
@@ -2898,7 +2899,7 @@ public class MdsDrv {
             freq = f1 - diff;
             
             // if (t.t_channel_id == 8 && debugCounter < 100) {
-            //     System.out.printf("GetPsgPitch Ch8: Note=%d Oct=%d NoteIdx=%d F1=%d Diff=%d FreqAfter=%d%n", 
+            //     logger.log(Level.TRACE, "GetPsgPitch Ch8: Note=%d Oct=%d NoteIdx=%d F1=%d Diff=%d FreqAfter=%d%n", 
             //         note, oct, noteIdx, f1, diff, freq >> oct);
             // }
 
@@ -3068,7 +3069,7 @@ public class MdsDrv {
             if (op > 0) envLog.append(",");
             envLog.append(String.format("%02X", insData.read8(24 + op) & 0x7f));
         }
-        System.out.println(envLog.toString());
+        logger.log(Level.TRACE, envLog.toString());
 
         // dataPtr is now 24.
         // Store TL values for volume calculations (bytes 24-27)

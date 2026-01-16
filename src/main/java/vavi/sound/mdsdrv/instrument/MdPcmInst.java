@@ -56,16 +56,10 @@ public class MdPcmInst extends Instrument.BaseInstrument implements Instrument.P
         return 0;
     }
 
-    private int[] buf = new int[2];
-
     @Override
     public void update(int chipId, int[][] outputs, int samples) {
         for (int i = 0; i < samples; i++) {
-            buf[0] = 0;
-            buf[1] = 0;
-            chip.update(buf);
-            outputs[0][i] = buf[0];
-            outputs[1][i] = buf[1];
+            chip.update(outputs, samples);
         }
     }
 

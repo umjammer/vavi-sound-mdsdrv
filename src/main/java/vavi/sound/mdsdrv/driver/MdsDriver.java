@@ -1,3 +1,9 @@
+/*
+ * Copyright (c) 2026 by Naohide Sano, All rights reserved.
+ *
+ * Programmed by Naohide Sano
+ */
+
 package vavi.sound.mdsdrv.driver;
 
 import java.lang.System.Logger;
@@ -20,6 +26,13 @@ import vavi.sound.mdsdrv.Memory;
 
 import static java.lang.System.getLogger;
 
+
+/**
+ * MdPcmInst.
+ *
+ * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
+ * @version 0.00 2026-01-13 nsano initial version <br>
+ */
 public class MdsDriver extends MdsDrv implements IDriver {
 
     private static final Logger logger = getLogger(MdsDriver.class.getName());
@@ -164,7 +177,7 @@ logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
         if (renderingFreq <= 0) renderingFreq = 44100;
         this.samplesPerFrame = (double) renderingFreq / 60.0; // Target 60Hz update rate
         this.sampleCounter = 0.0;
-        logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted(renderingFreq, samplesPerFrame));
+logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted(renderingFreq, samplesPerFrame));
     }
 
     @Override
@@ -314,7 +327,7 @@ logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
                 writePCM.accept(new ChipDatum(0, addr, val & 0xff));
             }
             @Override public int read8(int addr) {
-//                return pcm.read(addr); // TODO
+//                return pcm.read(addr); // TODO create ChipAction for read
                 return 0;
             }
             @Override public void write16(int addr, int val) { write8(addr, val >> 8); write8(addr+1, val & 0xFF); }
@@ -331,7 +344,7 @@ logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
         return new Memory() {
             @Override public void write8(int addr, int data) {
                 if (addr == 0xC00011) {
-                    // System.out.printf("PSG: %02x%n", data);
+//logger.log(Level.TRACE, "PSG: %02x".formatted(data));
                     writePSG.accept(new ChipDatum(0, 0, data)); // Port 0 assumed for PSG single port
                 }
                 else wrapped.write8(addr, data);

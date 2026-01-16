@@ -109,7 +109,7 @@ public class MdPcm {
     /** */
     public void setWorkReader(Function<Integer, Integer> workReader) {
         this.workReader = workReader;
-logger.log(Level.INFO, "set work reader");
+logger.log(Level.TRACE, "set work reader");
     }
 
     /** */
@@ -176,8 +176,6 @@ logger.log(Level.INFO, "set work reader");
                 pcmChannels[channelIndex].innerLoop = 4;  // Z80 ixl initialized to 4 (line 488 mdssub.z80)
                 pcmChannels[channelIndex].pitchTable = pitchTable;
                 pcmChannels[channelIndex].pitchTableRow = pitchValue;
-
-
             }
         }
     }
@@ -197,76 +195,79 @@ logger.log(Level.INFO, "set work reader");
      * - 8 iterations per count decrement
      * - Each iteration either reads or skips based on pitch_update table
      */
-    public void update(int[] data) {
+    public void update(int[][] data, int samples) {
         if (workReader == null) {
             return;  // workReader not initialized yet
         }
 
-        for (int ch = 0; ch < pcmChannels.length; ch++) {
-            PcmChannel pc = pcmChannels[ch];
-            if (!pc.active || pc.count <= 0) {
-                pc.active = false;
-                continue;
-            }
+        for (int i = 0; i < samples; i++) {
 
-            try {
-                // Get the correct pitch table for this channel (FILL or MIX)
-                byte[] pitchTable = pc.pitchTable;
-                if (pitchTable == null) {
+            data[0][i] = 0;
+            data[1][i] = 0;
+
+            for (PcmChannel pc : pcmChannels) {
+                if (!pc.active || pc.count <= 0) {
                     pc.active = false;
                     continue;
                 }
 
-                // Get the 8-byte pattern for this pitch
-                int tableIndex = pc.pitchTableRow * 8;
-                int pitchByte = pitchTable[tableIndex + pc.loopCounter] & 0xFF;
-
-                // Assembly behavior (mdssub.z80 line 1668-1688):
-                // The pitch_update table values modify the inc_read_one macro:
-                // - $23 = inc hl (advance source pointer - reads next sample)
-                // - $00 = nop (hold source pointer - repeats current sample)
-                //
-                // CRITICAL: We ALWAYS read the sample from current position.
-                // The pitch byte only controls whether we advance to the next sample after reading.
-
-                int sample = workReader.apply(pc.address + pc.sampleIndex);
-
-                // Unsigned 8-bit (0..255) centered at 128
-                int val = (sample & 0xFF) - 128;
-
-                // Use cached volume from channel (set during key-on)
-                int volume = pc.volume;
-
-                // Apply volume scaling (15-31 range -> 0.0-1.0)
-                if (volume < 15) volume = 15;
-                if (volume > 31) volume = 31;
-                double volScale = (volume - 15) / 16.0;
-                val = (int) (val * volScale * 64);
-
-                if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcm", "false"))) {
-                    data[0] += val;
-                    data[1] += val;
-                }
-
-                // Advance sample position only when pitch byte is 0x23 (inc hl)
-                // When pitch byte is 0x00 (nop), we hold the current position and re-read same sample
-                if (pitchByte == 0x23) {
-                    pc.sampleIndex++;
-                }
-
-                // Move to next iteration in the 8-iteration loop
-                pc.loopCounter++;
-                if (pc.loopCounter >= 8) {
-                    // After 8 iterations, decrement count and reset loop
-                    pc.loopCounter = 0;
-                    pc.count--;
-                    if (pc.count <= 0) {
+                try {
+                    // Get the correct pitch table for this channel (FILL or MIX)
+                    byte[] pitchTable = pc.pitchTable;
+                    if (pitchTable == null) {
                         pc.active = false;
+                        continue;
                     }
+
+                    // Get the 8-byte pattern for this pitch
+                    int tableIndex = pc.pitchTableRow * 8;
+                    int pitchByte = pitchTable[tableIndex + pc.loopCounter] & 0xFF;
+
+                    // Assembly behavior (mdssub.z80 line 1668-1688):
+                    // The pitch_update table values modify the inc_read_one macro:
+                    // - $23 = inc hl (advance source pointer - reads next sample)
+                    // - $00 = nop (hold source pointer - repeats current sample)
+                    //
+                    // CRITICAL: We ALWAYS read the sample from current position.
+                    // The pitch byte only controls whether we advance to the next sample after reading.
+
+                    int sample = workReader.apply(pc.address + pc.sampleIndex);
+
+                    // Unsigned 8-bit (0..255) centered at 128
+                    int val = (sample & 0xFF) - 128;
+
+                    // Use cached volume from channel (set during key-on)
+                    int volume = pc.volume;
+
+                    // Apply volume scaling (15-31 range -> 0.0-1.0)
+                    if (volume < 15) volume = 15;
+                    if (volume > 31) volume = 31;
+                    double volScale = (volume - 15) / 16.0;
+                    val = (int) (val * volScale * 64);
+
+                    data[0][i] += val;
+                    data[1][i] += val;
+
+                    // Advance sample position only when pitch byte is 0x23 (inc hl)
+                    // When pitch byte is 0x00 (nop), we hold the current position and re-read same sample
+                    if (pitchByte == 0x23) {
+                        pc.sampleIndex++;
+                    }
+
+                    // Move to next iteration in the 8-iteration loop
+                    pc.loopCounter++;
+                    if (pc.loopCounter >= 8) {
+                        // After 8 iterations, decrement count and reset loop
+                        pc.loopCounter = 0;
+                        pc.count--;
+                        if (pc.count <= 0) {
+                            pc.active = false;
+                        }
+                    }
+                } catch (Exception e) {
+                    // Out of bounds - stop playback
+                    pc.active = false;
                 }
-            } catch (Exception e) {
-                // Out of bounds - stop playback
-                pc.active = false;
             }
         }
     }

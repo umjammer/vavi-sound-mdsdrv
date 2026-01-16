@@ -10,6 +10,7 @@ import javax.sound.sampled.SourceDataLine;
 
 import vavi.sound.mdsdrv.MdsDrv.WorkArea;
 import vavi.sound.mdsdrv.chips.MdPcm;
+import vavi.sound.mdsdrv.instrument.MdPcmInst;
 import vavi.util.Debug;
 import vavi.util.properties.annotation.Property;
 import vavi.util.properties.annotation.PropsEntity;
@@ -107,7 +108,9 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         int sampleRate = 44100;
         mdsound.chips.Ym2612 fm = new mdsound.chips.Ym2612();
         mdsound.chips.Sn76489 psg = new mdsound.chips.Sn76489();
-        
+        // Create PCM HLE chip
+        MdPcm pcm = new MdPcm();
+
         // Clocks from MdsPlugin / standard
         int fmClock = 7670454;
         int psgClock = 3579545;
@@ -115,9 +118,6 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         fm.init(fmClock, sampleRate, 0); // interpolation 0
         psg.start(sampleRate, psgClock);
         psg.reset();
-
-        // Create PCM HLE chip
-        MdPcm mdPcm = new MdPcm();
 
         WorkArea workArea = new WorkArea();
 
@@ -171,10 +171,10 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                 return new Memory() {
                     @Override
                     public void write8(int addr, int val) {
-                        mdPcm.write(addr, val);
+                        pcm.write(addr, val);
                     }
                     @Override public int read8(int addr) {
-                        return mdPcm.read(addr);
+                        return pcm.read(addr);
                     }
                     @Override public void write16(int addr, int val) { write8(addr, val >> 8); write8(addr+1, val & 0xFF); }
                     @Override public void write32(int addr, int val) { write16(addr, val >> 16); write16(addr+2, val & 0xFFFF); }
@@ -209,7 +209,7 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
 
         // After driver initialization, w_pcm_ptr is available
         // Set up workReader for MdPcm to read PCM samples
-        mdPcm.setWorkReader(addr -> {
+        pcm.setWorkReader(addr -> {
             if (workArea.w_pcm_ptr != null) {
                 return workArea.w_pcm_ptr.read8(addr);
             }
@@ -223,6 +223,7 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         int samplesPerStep = sampleRate / updateRate; 
         int[][] fmBuf = new int[2][samplesPerStep];
         int[][] psgBuf = new int[2][samplesPerStep];
+        int[][] pcmBuf = new int[2][samplesPerStep];
         byte[] mixBuf = new byte[samplesPerStep * 4]; // 16bit stereo
         
         AudioFormat format = new AudioFormat(sampleRate, 16, 2, true, false);
@@ -256,18 +257,13 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                 fm.update(fmBuf, samplesPerStep);
             if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPsg", "false")))
                 psg.update(psgBuf, samplesPerStep);
+            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcm", "false")))
+                pcm.update(pcmBuf, samplesPerStep);
 
             for (int i = 0; i < samplesPerStep; i++) {
-                int pcmL = 0, pcmR = 0;
 
-                // Update PCM using MdPcm HLE
-                int[] pcmBuf = {0, 0};
-                mdPcm.update(pcmBuf);
-                pcmL = pcmBuf[0];
-                pcmR = pcmBuf[1];
-
-                int L = fmBuf[0][i] + psgBuf[0][i] + pcmL;
-                int R = fmBuf[1][i] + psgBuf[1][i] + pcmR;
+                int L = fmBuf[0][i] + psgBuf[0][i] + pcmBuf[0][i];
+                int R = fmBuf[1][i] + psgBuf[1][i] + pcmBuf[1][i];
 
                 // Clamp 16-bit
                 L = Math.max(-32768, Math.min(32767, L));
