@@ -27,7 +27,11 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 ## TODO
 
 * compiler
-* pcm
+* ~~pcm~~
+* song loop is broken
+* psm drums has problems
+  * wrong timbre?
+  * no filter?
 
 ---
 
