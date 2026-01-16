@@ -19,6 +19,9 @@ public class MdsDrv {
 
     private static final Logger logger = getLogger(MdsDrv.class.getName());
 
+    // Persistent Z80 RAM buffer - must exist for the lifetime of the driver
+    protected byte[] z80RamBuffer = new byte[0x2000];  // 8KB Z80 RAM
+
     public static final int MDSDRV_VER = 0x0006;
     public static final int MDSDRV_MIN_VER = 0x0003;
 
@@ -610,26 +613,39 @@ public class MdsDrv {
     }
 
     protected Memory getZ80Ram() {
+        // Use persistent Z80 RAM buffer from class field
         return new Memory() {
             public int read8(int addr) {
+                int offset = addr - MdDef.z80_ram;
+                if (offset >= 0 && offset < z80RamBuffer.length) {
+                    return z80RamBuffer[offset] & 0xFF;
+                }
                 return 0;
             }
 
             public int read16(int addr) {
-                return 0;
+                return (read8(addr) << 8) | read8(addr + 1);
             }
 
             public int read32(int addr) {
-                return 0;
+                return (read16(addr) << 16) | read16(addr + 2);
             }
 
             public void write8(int addr, int data) {
+                int offset = addr - MdDef.z80_ram;
+                if (offset >= 0 && offset < z80RamBuffer.length) {
+                    z80RamBuffer[offset] = (byte) data;
+                }
             }
 
             public void write16(int addr, int data) {
+                write8(addr, data >> 8);
+                write8(addr + 1, data & 0xFF);
             }
 
             public void write32(int addr, int data) {
+                write16(addr, data >> 16);
+                write16(addr + 2, data & 0xFFFF);
             }
 
             public Memory add(int offset) {
@@ -2108,9 +2124,10 @@ public class MdsDrv {
 
                         // Write count (word)
                         zram.write16(zPcmBase + MdDef.zp_count, count);
-                        // Write pitch (byte) - Write raw value directly like assembly does
+                        // Write pitch - write raw value directly like assembly does
                         // Assembly line 3116: move.b d3,zp_pitch-zp_count(tmpa0) - d3 contains original pitch
                         zram.write8(zPcmBase + MdDef.zp_pitch, pitchOrig);
+                        System.err.printf("MDS_PCM_PITCH: writing pitchOrig=%d%n", pitchOrig);
                     }
                     
                     // For now, let's assume standard format and try to populate likely fields
@@ -3370,8 +3387,11 @@ public class MdsDrv {
                             int startVal = (m.read8(lp+16) & 0xff) | ((m.read8(lp+17) & 0xff) << 8) | ((m.read8(lp+18) & 0xff) << 16) | ((m.read8(lp+19) & 0xff) << 24);
                             // Size at +20
                             int sizeVal = (m.read8(lp+20) & 0xff) | ((m.read8(lp+21) & 0xff) << 8) | ((m.read8(lp+22) & 0xff) << 16) | ((m.read8(lp+23) & 0xff) << 24);
-                            // Rate at +32
-                            int rateVal = (m.read8(lp+32) & 0xff); 
+                            // Rate/Pitch - original assembly @cmd_pcm reads FIRST BYTE of chunk data
+                            // RIFF pcmh structure: +0-3="pcmh", +4-7=size, +8+=data
+                            // So first data byte is at offset +8, which is the index field in current parsing
+                            // Let's try reading the ACTUAL first byte of the chunk data
+                            int rateVal = (m.read8(lp+8) & 0xff);  // First data byte (currently reading as index)
                             if (rateVal == 0) rateVal = 4; // Default to 17.5kHz (approx) if unspecified
                             
                             // Construct PCM Header (8 bytes, matching assembly struct)

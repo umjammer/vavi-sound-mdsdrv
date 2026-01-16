@@ -15,7 +15,12 @@ import vavi.sound.mdsdrv.MdDef;
 
 
 /**
- * PCM HLE State.
+ * PCM HLE State - High Level Emulation of Z80 PCM playback routine.
+ *
+ * Ported from mdssub.z80 m2_loop (lines 458-564):
+ * - Uses pitch_update tables to control sample timing
+ * - Implements self-modifying code behavior via sample-skipping
+ * - Handles bank switching and count decrementing
  *
  * @author <a href="mailto:umjammer@gmail.com">Naohide Sano</a> (nsano)
  * @version 0.00 2026-01-15 nsano initial version <br>
@@ -24,18 +29,51 @@ public class MdPcm {
 
     private static final Logger logger = System.getLogger(MdPcm.class.getName());
 
+    // Pitch update tables from mdssub.z80 lines 1668-1688
+    // These tables control which samples are read (0x23=read) vs skipped (0x00=nop)
+    // Each row represents one pitch level (0-7), with 8 bytes per row
+    private static final byte[] PITCH_UPDATE_FILL = {
+        (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x23,  // pitch 0: read 1/8
+        (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x23,  // pitch 1: read 2/8
+        (byte)0x00, (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x23,  // pitch 2: read 3/8
+        (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x23,  // pitch 3: read 4/8
+        (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x23, (byte)0x00, (byte)0x23, (byte)0x23, (byte)0x23,  // pitch 4: read 5/8
+        (byte)0x00, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x00, (byte)0x23, (byte)0x23, (byte)0x23,  // pitch 5: read 6/8
+        (byte)0x00, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23,  // pitch 6: read 7/8
+        (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23, (byte)0x23   // pitch 7: read 8/8
+    };
+
+    private static final byte[] PITCH_UPDATE_MIX = {
+        (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x13,  // pitch 0: read 1/8
+        (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x00, (byte)0x00, (byte)0x13,  // pitch 1: read 2/8
+        (byte)0x00, (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x13,  // pitch 2: read 3/8
+        (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x13,  // pitch 3: read 4/8
+        (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x13, (byte)0x00, (byte)0x13, (byte)0x13, (byte)0x13,  // pitch 4: read 5/8
+        (byte)0x00, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x00, (byte)0x13, (byte)0x13, (byte)0x13,  // pitch 5: read 6/8
+        (byte)0x00, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13,  // pitch 6: read 7/8
+        (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13, (byte)0x13   // pitch 7: read 8/8
+    };
+
     private static class PcmChannel {
 
         boolean active = false;
         int address;
         int length;
-        int pitch;
-        int volume;  // Z80 volume value (15-31 range from mds_z80_get_vol)
-        double pos;
-        double step;
+        int count;      // Z80 count value - iterations remaining
+        int pitch;      // Z80 pitch value (raw from MDS)
+        int pitchTableRow;  // Which row of pitch_update table to use (0-7)
+        int volume;     // Z80 volume value (15-31 range from mds_z80_get_vol)
+        int bank;       // Current bank for address window
+        int sampleIndex;    // Current sample position in PCM data
+        int loopCounter;    // Tracks position within 8-iteration loop (0-7)
+        byte[] pitchTable;  // Pointer to pitch_update_fill or pitch_update_mix table
     }
 
+    // PCM channels: z_pcm1, z_pcm2, z_pcm3
+    // Offsets within pcmChannels array correspond to Z80 channel addresses
     private final PcmChannel[] pcmChannels = {new PcmChannel(), new PcmChannel(), new PcmChannel()};
+    private static final int PITCH_OFFSET_FILL = 0xF8;  // For z_pcm1 (pitch_update_fill table)
+    private static final int PITCH_OFFSET_MIX = 0x38;   // For z_pcm2 (pitch_update_mix table)
 
     private final byte[] z80RamData = new byte[0x2000];
 
@@ -53,32 +91,65 @@ logger.log(Level.INFO, "set work reader");
         if (offset >= 0 && offset < z80RamData.length) {
             z80RamData[offset] = (byte) val;
 
-            // Check for KeyOn (zp_key_on offset from z_pcm1)
+            // Check for KeyOn on any of the 3 PCM channels
+            int channelIndex = -1;
+            int pcmBase = -1;
+            int pitchOffset = -1;
+            byte[] pitchTable = null;
+
             if (addr == MdDef.z_pcm1 + MdDef.zp_key_on && val == 1) {
-                int pcmBase = MdDef.z_pcm1;
-                int bank = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_bank] & 0xFF;
-                int low = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_addr] & 0xFF;
-                int mid = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_addr + 1] & 0xFF;
-                // Z80 address: mid<<8|low (0x8000-0xFFFF is window into 68K)
-                // Bank selects which 32KB page of 68K memory
-                // Convert Z80 window address to 68K offset:
-                // - Z80 addr 0x8000 maps to 68K addr = (bank << 15) | (z80_addr & 0x7FFF)
+                channelIndex = 0;
+                pcmBase = MdDef.z_pcm1;
+                pitchOffset = PITCH_OFFSET_FILL;
+                pitchTable = PITCH_UPDATE_FILL;
+            } else if (addr == MdDef.z_pcm2 + MdDef.zp_key_on && val == 1) {
+                channelIndex = 1;
+                pcmBase = MdDef.z_pcm2;
+                pitchOffset = PITCH_OFFSET_MIX;
+                pitchTable = PITCH_UPDATE_MIX;
+            } else if (addr == MdDef.z_pcm3 + MdDef.zp_key_on && val == 1) {
+                channelIndex = 2;
+                pcmBase = MdDef.z_pcm3;
+                pitchOffset = PITCH_OFFSET_FILL;  // PCM3 uses fill table
+                pitchTable = PITCH_UPDATE_FILL;
+            }
+
+            if (channelIndex >= 0) {
+                int offsetBase = pcmBase - MdDef.z80_ram;
+
+                // Read all parameters from Z80 RAM
+                int bank = z80RamData[offsetBase + MdDef.zp_bank] & 0xFF;
+                int low = z80RamData[offsetBase + MdDef.zp_addr] & 0xFF;
+                int mid = z80RamData[offsetBase + MdDef.zp_addr + 1] & 0xFF;
+                int pitch = z80RamData[offsetBase + MdDef.zp_pitch] & 0xFF;
+                int volume = z80RamData[offsetBase + MdDef.zp_vol] & 0xFF;
+                int countH = z80RamData[offsetBase + MdDef.zp_count] & 0xFF;
+                int countL = z80RamData[offsetBase + MdDef.zp_count + 1] & 0xFF;
+                int count = (countH << 8) | countL;
+
+                // Convert Z80 window address to 68K offset
                 int z80Addr = (mid << 8) | low;
                 int startAddr = (bank << 15) | (z80Addr & 0x7FFF);
-                int pitch = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_pitch] & 0xFF;
-                int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
 
-                System.err.printf("PCM_KEYON: addr=%06X pitch=%d vol=%d%n", startAddr, pitch, volume);
-                pcmChannels[0].active = true;
-                pcmChannels[0].address = startAddr;
-                pcmChannels[0].volume = volume;
-                pcmChannels[0].pos = 0;
-                // Pitch to step conversion
-                // Pitch value from RIFF header (e.g., 92) determines playback rate
-                // Formula: PCM frequency = pitch * 100 Hz (empirical from test code)
-                if (pitch == 0) pitch = 4;  // Default if not set
-                double pcmFreq = pitch * 100.0;  // e.g., pitch=92 -> 9200 Hz
-                pcmChannels[0].step = pcmFreq / 44100.0;
+                System.err.printf("PCM_KEYON[%d]: addr=%06X pitch=%d vol=%d count=%d%n", channelIndex, startAddr, pitch, volume, count);
+
+                // Initialize channel state
+                pcmChannels[channelIndex].active = true;
+                pcmChannels[channelIndex].address = startAddr;
+                pcmChannels[channelIndex].bank = bank;
+                pcmChannels[channelIndex].pitch = pitch & 0xFF;
+                pcmChannels[channelIndex].volume = volume;
+                pcmChannels[channelIndex].count = count;
+                pcmChannels[channelIndex].sampleIndex = 0;
+                pcmChannels[channelIndex].loopCounter = 0;
+                pcmChannels[channelIndex].pitchTable = pitchTable;
+
+                // Calculate pitch table index from pitch value
+                int a = ((pitch * 8 + pitchOffset) & 0xFF);
+                int pitchValue = (a >> 3) & 0x07;
+                pcmChannels[channelIndex].pitchTableRow = pitchValue;
+
+                logger.log(Level.INFO, "PCM_KEYON[" + channelIndex + "]: pitch=" + pitch + " offset=0x" + Integer.toHexString(pitchOffset) + " row=" + pitchValue);
             }
         }
     }
@@ -90,44 +161,79 @@ logger.log(Level.INFO, "set work reader");
         return 0;
     }
 
-    /** */
+    /**
+     * Update PCM playback - generates one audio sample per call.
+     *
+     * Ported from mdssub.z80 m2_pcm1_loop (lines 492-564):
+     * - Implements frame-based, table-driven sample reading
+     * - 8 iterations per count decrement
+     * - Each iteration either reads or skips based on pitch_update table
+     */
     public void update(int[] data) {
-        for (PcmChannel pc : pcmChannels) {
-            if (pc.active) {
-                int posInt = (int) pc.pos;
+        if (workReader == null) {
+            return;  // workReader not initialized yet
+        }
 
-                // Basic bounds check if possible, or rely on catch
-                // ByteArrayMemory throws IndexOutOfBoundsException
-                int sample = 0;
-                try {
-                    sample = workReader.apply(pc.address + posInt);
-                } catch (Exception e) {
-logger.log(Level.ERROR, e.getMessage(), e);
+        for (int ch = 0; ch < pcmChannels.length; ch++) {
+            PcmChannel pc = pcmChannels[ch];
+            if (!pc.active || pc.count <= 0) {
+                pc.active = false;
+                continue;
+            }
+
+            try {
+                // Get the correct pitch table for this channel (FILL or MIX)
+                byte[] pitchTable = pc.pitchTable;
+                if (pitchTable == null) {
                     pc.active = false;
                     continue;
                 }
 
-                // Unsigned 8-bit (0..255) centered at 128
-                int val = (sample & 0xFF) - 128;
+                // Get the 8-byte pattern for this pitch
+                int tableIndex = pc.pitchTableRow * 8;
+                int pitchByte = pitchTable[tableIndex + pc.loopCounter] & 0xFF;
 
-                // Read volume dynamically from z80RamData (it may be updated after key-on)
-                int pcmBase = MdDef.z_pcm1;
-                int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
+                // Check if this iteration should read (0x23=INC HL or 0x13=INC DE) or skip (0x00=nop)
+                if (pitchByte != 0x00) {
+                    // Non-zero = read one PCM sample (whether 0x23 or 0x13)
+                    int sample = workReader.apply(pc.address + pc.sampleIndex);
 
-                // Apply volume from mds_z80_get_vol (range 15-31, where 31=loudest)
-                // Scale: (volume - 15) / 16 gives 0.0 to 1.0
-                // Then multiply by gain factor
-                if (volume < 15) volume = 15;
-                if (volume > 31) volume = 31;
-                double volScale = (volume - 15) / 16.0;
-                val = (int) (val * volScale * 64);  // Apply volume and gain
+                    // Unsigned 8-bit (0..255) centered at 128
+                    int val = (sample & 0xFF) - 128;
 
-                if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcm", "false"))) {
-                    data[0] += val;
-                    data[1] += val;
+                    // Read volume from Z80 RAM
+                    int pcmBase = MdDef.z_pcm1;
+                    int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
+
+                    // Apply volume scaling (15-31 range -> 0.0-1.0)
+                    if (volume < 15) volume = 15;
+                    if (volume > 31) volume = 31;
+                    double volScale = (volume - 15) / 16.0;
+                    val = (int) (val * volScale * 64);
+
+                    if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcm", "false"))) {
+                        data[0] += val;
+                        data[1] += val;
+                    }
+
+                    // Advance sample position
+                    pc.sampleIndex++;
                 }
+                // If pitchByte == 0x00 (nop), skip reading - output silence
 
-                pc.pos += pc.step;
+                // Move to next iteration in the 8-iteration loop
+                pc.loopCounter++;
+                if (pc.loopCounter >= 8) {
+                    // After 8 iterations, decrement count and reset loop
+                    pc.loopCounter = 0;
+                    pc.count--;
+                    if (pc.count <= 0) {
+                        pc.active = false;
+                    }
+                }
+            } catch (Exception e) {
+                // Out of bounds - stop playback
+                pc.active = false;
             }
         }
     }

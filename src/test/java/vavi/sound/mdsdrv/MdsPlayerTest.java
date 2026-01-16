@@ -9,6 +9,7 @@ import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 
 import vavi.sound.mdsdrv.MdsDrv.WorkArea;
+import vavi.sound.mdsdrv.chips.MdPcm;
 import vavi.util.Debug;
 import vavi.util.properties.annotation.Property;
 import vavi.util.properties.annotation.PropsEntity;
@@ -115,19 +116,9 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         psg.start(sampleRate, psgClock);
         psg.reset();
 
-        // PCM HLE State
-        class PcmChannel {
-            boolean active = false;
-            int address;
-            int length;
-            int pitch;
-            int volume;  // Z80 volume value (15-31 range from mds_z80_get_vol)
-            double pos;
-            double step;
-        }
-        PcmChannel[] pcmChannels = {new PcmChannel(), new PcmChannel(), new PcmChannel()};
-        byte[] z80RamData = new byte[0x2000];
-        
+        // Create PCM HLE chip
+        MdPcm mdPcm = new MdPcm();
+
         WorkArea workArea = new WorkArea();
 
         // Driver with overriden IO
@@ -180,50 +171,10 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                 return new Memory() {
                     @Override
                     public void write8(int addr, int val) {
-                        int offset = addr - MdDef.z80_ram;
-                        if (offset >= 0 && offset < z80RamData.length) {
-                             z80RamData[offset] = (byte)val;
-
-                             // Check for KeyOn (zp_key_on offset from z_pcm1)
-                             if (addr == MdDef.z_pcm1 + MdDef.zp_key_on && val == 1) {
-                                 int pcmBase = MdDef.z_pcm1;
-                                 int bank = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_bank] & 0xFF;
-                                 int low = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_addr] & 0xFF;
-                                 int mid = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_addr + 1] & 0xFF;
-                                 // Z80 address: mid<<8|low (0x8000-0xFFFF is window into 68K)
-                                 // Bank selects which 32KB page of 68K memory
-                                 // Convert Z80 window address to 68K offset:
-                                 // - Z80 addr 0x8000 maps to 68K addr = (bank << 15) | (z80_addr & 0x7FFF)
-                                 int z80Addr = (mid << 8) | low;
-                                 int startAddr = (bank << 15) | (z80Addr & 0x7FFF);
-                                 int pitch = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_pitch] & 0xFF;
-                                 int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
-
-                                 // Calculate pitch divisor (same as assembly)
-                                 int pitchDiv = pitch;
-                                 pitchDiv = (pitchDiv * 2) & 0xFF;
-                                 pitchDiv = (pitchDiv * 2) & 0xFF;
-                                 // Note: w_pcm_mode is typically 2 for these test files, so the mode 3 check usually doesn't apply
-                                 // if (((w_pcm_mode & 0xF) - 3) == 0) {
-                                 //     pitchDiv = (pitchDiv + pitch) & 0xFF;
-                                 // }
-
-                                 System.err.printf("PCM_KEYON: addr=%06X pitch=%d vol=%d pitchDiv=%d%n", startAddr, pitch, volume, pitchDiv);
-                                 pcmChannels[0].active = true;
-                                 pcmChannels[0].address = startAddr;
-                                 pcmChannels[0].volume = volume;
-                                 pcmChannels[0].pos = 0;
-                                 // Pitch to step conversion
-                                 if (pitch == 0) pitch = 4;
-                                 double pcmFreq = pitch * 100.0;  // pitch=92 -> 9200 Hz
-                                 pcmChannels[0].step = pcmFreq / 44100.0;
-                             }
-                        }
+                        mdPcm.write(addr, val);
                     }
-                    @Override public int read8(int addr) { 
-                        int offset = addr - MdDef.z80_ram;
-                        if (offset >= 0 && offset < z80RamData.length) return z80RamData[offset] & 0xFF;
-                        return 0;
+                    @Override public int read8(int addr) {
+                        return mdPcm.read(addr);
                     }
                     @Override public void write16(int addr, int val) { write8(addr, val >> 8); write8(addr+1, val & 0xFF); }
                     @Override public void write32(int addr, int val) { write16(addr, val >> 16); write16(addr+2, val & 0xFFFF); }
@@ -255,7 +206,16 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         };
 
         driver.mds_top(workArea, mdsMem, null); // Initialize driver
-        
+
+        // After driver initialization, w_pcm_ptr is available
+        // Set up workReader for MdPcm to read PCM samples
+        mdPcm.setWorkReader(addr -> {
+            if (workArea.w_pcm_ptr != null) {
+                return workArea.w_pcm_ptr.read8(addr);
+            }
+            return 0;
+        });
+
         driver.mds_request(workArea, 1, 0); // Request song 1
 
         // Audio Output setup
@@ -300,41 +260,11 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
             for (int i = 0; i < samplesPerStep; i++) {
                 int pcmL = 0, pcmR = 0;
 
-                for (PcmChannel pc : pcmChannels) {
-                    try {
-                        if (pc.active && workArea.w_pcm_ptr != null) {
-                            int posInt = (int) pc.pos;
-
-                            // Basic bounds check if possible, or rely on catch
-                            // ByteArrayMemory throws IndexOutOfBoundsException
-                            int sample = workArea.w_pcm_ptr.read8(pc.address + posInt);
-
-                            // Unsigned 8-bit (0..255) centered at 128
-                            int val = (sample & 0xFF) - 128;
-
-                            // Read volume dynamically from z80RamData (it may be updated after key-on)
-                            int pcmBase = MdDef.z_pcm1;
-                            int volume = z80RamData[(pcmBase - MdDef.z80_ram) + MdDef.zp_vol] & 0xFF;
-
-                            // Apply volume from mds_z80_get_vol (range 15-31, where 31=loudest)
-                            // Scale: (volume - 15) / 16 gives 0.0 to 1.0
-                            // Then multiply by gain factor
-                            if (volume < 15) volume = 15;
-                            if (volume > 31) volume = 31;
-                            double volScale = (volume - 15) / 16.0;
-                            val = (int) (val * volScale * 64);  // Apply volume and gain
-
-                            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcm", "false"))) {
-                                pcmL += val;
-                                pcmR += val;
-                            }
-
-                            pc.pos += pc.step;
-                        }
-                    } catch (Exception e) {
-                        pc.active = false; // Stop if error (End of buffer)
-                    }
-                }
+                // Update PCM using MdPcm HLE
+                int[] pcmBuf = {0, 0};
+                mdPcm.update(pcmBuf);
+                pcmL = pcmBuf[0];
+                pcmR = pcmBuf[1];
 
                 int L = fmBuf[0][i] + psgBuf[0][i] + pcmL;
                 int R = fmBuf[1][i] + psgBuf[1][i] + pcmR;
