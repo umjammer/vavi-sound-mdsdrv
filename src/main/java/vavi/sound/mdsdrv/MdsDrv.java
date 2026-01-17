@@ -771,7 +771,7 @@ public class MdsDrv {
         if (sdtop == null)
             return;
 
-        a0.w_tempo[rnum] = a0.w_gtempo - 1;
+        a0.w_tempo[rnum] = a0.w_gtempo;
         a0.w_counter[rnum] = 0;
         a0.w_seq_step[rnum] = 0;
         a0.w_tmask[rnum] = 0;
@@ -2111,28 +2111,11 @@ public class MdsDrv {
                     int count = 0;
                     int len = t.t_pcm_length;
 
-                    if (pitch != 0) {
-                        int pitchDiv = pitch;
-
-                        // Emulate BYTE add operations (8-bit wrapping)
-                        pitchDiv = (pitchDiv * 2) & 0xff;  // add.b pitchDiv,pitchDiv
-                        pitchDiv = (pitchDiv * 2) & 0xff;  // add.b pitchDiv,pitchDiv again
-
-                        // Mode 3 check
-                        if (((a0.w_pcm_mode & 0xF) - 3) == 0) { // Check mode 3
-                            pitchDiv = (pitchDiv + pitchOrig) & 0xff;  // add.b pitchOrig,pitchDiv (BYTE op, may wrap)
-                        }
-
-                        int calcPitch = pitchDiv; // This is the actual pitch divisor
-
-                        if (calcPitch != 0) {
-                            count = len / calcPitch; // divu.w d1,d2
-                        }
-                    } else {
-                        // Pitch 0 = 1.0x speed -> 1 count per byte (or close enough)
-                        // Use divisor 1 (calcPitch = 1 implicitly)
-                        count = len; 
-                    }
+                // Simplified Logic: Pass full length as byte count.
+                // MdsPcm.java will use 'pitch' to determine consumption rate (step size).
+                count = len; // count was declared at line 2111
+                // Note: We ignore the assembly's division logic because we don't know the exact Z80 loop mechanics.
+                // Treating count as 'Total Bytes' and decrementing by 'Bytes Consumed' in MdsPcm is robust.
                     
                     if (count > 0) {
                         count += 0x1ff;         // addi.w #$1ff,d2

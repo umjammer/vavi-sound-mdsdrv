@@ -135,7 +135,7 @@ public class MdsPcm {
             if (pitch != 0) ch.pitch = pitch;
             
             // Log KeyOn event
-            // logger.log(Level.INFO, String.format("MdsPcm: KeyOn Ch=%d Bank=%02x Addr=%04x Pitch=%02x Mode=%d", chIdx, ch.bank, ch.pcmAddr, ch.pitch, mode));
+            logger.log(Level.INFO, String.format("MdsPcm: KeyOn Ch=%d Bank=%02x Addr=%04x Pitch=%02x Mode=%d", chIdx, ch.bank, ch.pcmAddr, ch.pitch, mode));
 
             z80Ram[zOffset + ZP_KEY_ON] = 0;
             ch.subAccumulator = 0;
