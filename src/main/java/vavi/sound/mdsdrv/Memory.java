@@ -1,6 +1,12 @@
+/*
+ * https://github.com/superctr/MDSDRV
+ */
+
 package vavi.sound.mdsdrv;
 
+
 public interface Memory {
+
     int read8(int addr);
 
     int read16(int addr);

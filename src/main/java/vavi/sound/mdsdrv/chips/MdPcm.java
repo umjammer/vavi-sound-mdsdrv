@@ -15,6 +15,8 @@ import vavi.sound.mdsdrv.MdDef;
 
 
 /**
+ * 8bit liner PCM.
+ *
  * PCM HLE State - High Level Emulation of Z80 PCM playback routine.
  *
  * Ported from mdssub.z80 m2_loop (lines 458-564):

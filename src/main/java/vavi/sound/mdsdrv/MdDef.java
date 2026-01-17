@@ -1,4 +1,9 @@
+/*
+ * https://github.com/superctr/MDSDRV
+ */
+
 package vavi.sound.mdsdrv;
+
 
 /**
  * Ported from mddef.inc
