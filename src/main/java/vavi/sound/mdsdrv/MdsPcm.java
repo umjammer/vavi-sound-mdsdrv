@@ -1,10 +1,12 @@
 package vavi.sound.mdsdrv;
 
 import java.lang.System.Logger;
-// import java.lang.System.Logger.Level; // Unused
-import static java.lang.System.getLogger;
+import java.lang.System.Logger.Level;
 import java.util.function.Consumer;
+
 import musicDriverInterface.ChipDatum;
+
+import static java.lang.System.getLogger;
 
 /**
  * MdsPcm - Emulates mdssub.z80 PCM mixing logic.
@@ -14,7 +16,6 @@ public class MdsPcm {
     @SuppressWarnings("unused")
     private static final Logger logger = getLogger(MdsPcm.class.getName());
 
-    private final MdsDrv drv;
     private final byte[] z80Ram;
     
     // Z80 RAM offsets (from mdssub.inc)
@@ -31,19 +32,6 @@ public class MdsPcm {
 
     private static final int Z_VTAB = 0x0f00;
 
-    // Pitch tables (mimic pitch_update_fill and pitch_update_mix)
-    private static final int[][] PITCH_TABLE_FILL = {
-        {0,0,0,0,0,0,0,1}, // 0
-        {0,0,0,1,0,0,0,1}, // 1
-        {0,0,1,0,0,1,0,1}, // 2
-        {0,1,0,1,0,1,0,1}, // 3
-        {0,1,0,1,0,1,1,1}, // 4
-        {0,1,1,1,0,1,1,1}, // 5
-        {0,1,1,1,1,1,1,1}, // 6
-        {1,1,1,1,1,1,1,1}  // 7
-    };
-    private static final int[][] PITCH_TABLE_MIX = PITCH_TABLE_FILL;
-
     // Internal state for playback
     private static class ChannelState {
         int id; // 0, 1, 2
@@ -53,7 +41,7 @@ public class MdsPcm {
         int pitch;
         int volume;
         int stepsRemaining; 
-        int pitIndex; // 0-7, index into pitch table
+        int subAccumulator; // DDA accumulator (was pitIndex)
     }
 
     private ChannelState[] channels = new ChannelState[3];
@@ -62,9 +50,8 @@ public class MdsPcm {
 
     private Consumer<ChipDatum> fmCallback;
 
-    public MdsPcm(MdsDrv drv, int sampleRate) {
-        this.drv = drv;
-        this.z80Ram = drv.z80RamBuffer;
+    public MdsPcm(byte[] z80Ram, int sampleRate) {
+        this.z80Ram = z80Ram;
         for (int i = 0; i < 3; i++) {
             channels[i] = new ChannelState();
             channels[i].id = i;
@@ -72,15 +59,11 @@ public class MdsPcm {
         this.hostSampleRate = sampleRate;
     }
     
-    public void setHostSampleRate(int rate) {
-        this.hostSampleRate = rate;
-    }
-    
     public void setFmCallback(Consumer<ChipDatum> callback) {
         this.fmCallback = callback;
     }
 
-    public void update(Memory pcmPtr, MdsDrv.WorkArea workArea) {
+    public void update(Memory pcmPtr) {
         int mode = z80Ram[0x0e05] & 0xFF; // z_mode
 
         double targetRate = 0;
@@ -148,13 +131,14 @@ public class MdsPcm {
             int addrL = z80Ram[zOffset + ZP_ADDR] & 0xFF;
             int addrH = z80Ram[zOffset + ZP_ADDR + 1] & 0xFF;
             ch.pcmAddr = (addrH << 8) | addrL;
-            ch.pitch = z80Ram[zOffset + ZP_PITCH] & 0xFF; 
+            int pitch = z80Ram[zOffset + ZP_PITCH] & 0xFF;
+            if (pitch != 0) ch.pitch = pitch;
             
             // Log KeyOn event
             // logger.log(Level.INFO, String.format("MdsPcm: KeyOn Ch=%d Bank=%02x Addr=%04x Pitch=%02x Mode=%d", chIdx, ch.bank, ch.pcmAddr, ch.pitch, mode));
 
             z80Ram[zOffset + ZP_KEY_ON] = 0;
-            ch.pitIndex = 0;
+            ch.subAccumulator = 0;
             ch.active = true;
              int cntL = z80Ram[zOffset + 6] & 0xFF;
              int cntH = z80Ram[zOffset + 7] & 0xFF;
@@ -164,19 +148,6 @@ public class MdsPcm {
         ChannelState ch = channels[chIdx];
         if (!ch.active) return -999;
         
-        // Z80 loop dynamically checks pitch?
-        // No, mdssub modifies the loop code on KeyOn/PitchChange.
-        // But `z_pcm1_pitch` is checked periodically?
-        // m2_loop does NOT check pitch. 
-        // m2_key_on checks pitch.
-        // So pitch is latched at KeyOn.
-        // Wait, does it update pitch mid-note?
-        // `m2_pcm1_key_on` updates it.
-        // If we want to change pitch, we must re-trigger?
-        // Or write to z_pcm1_pitch and trigger something?
-        // `mdssub` has `check_bank` but not `check_pitch` in main loop.
-        // So Pitch is constant per Note.
-        
         int vol = z80Ram[zOffset + ZP_VOL] & 0xFF;
         if ((vol & 0x80) != 0) {
             z80Ram[zOffset + ZP_KEY_ON] = 0;
@@ -184,42 +155,52 @@ public class MdsPcm {
             return -999;
         }
         
-        // Pitch processing
-        int pitch = ch.pitch & 7;
-        int[] pattern = (mode == 2) ? PITCH_TABLE_FILL[pitch] : PITCH_TABLE_MIX[pitch];
-        
-        int slotsPerSample = 2; // Assuming 18kHz vs 8 slots loop
+        // Pitch processing using DDA (matching Z80 driver table logic)
+        // Rate = 0x10 + (pitch * 2) -> 1.0x to 2.0x
+        int rate = 0x10 + (ch.pitch * 2);
+
         int currentSample = 0;
         
-        for (int k = 0; k < slotsPerSample; k++) {
-            int step = pattern[ch.pitIndex];
-            ch.pitIndex = (ch.pitIndex + 1) & 7;
+        // Single step per update (1 output sample)
+        ch.subAccumulator += rate; // DDA accumulation
+        int step = ch.subAccumulator >> 4;
+        ch.subAccumulator &= 0x0F;
             
-            if (step == 1) {
+        ch.pcmAddr += step;
+            
+            while (ch.pcmAddr >= 0x10000) { 
+                ch.pcmAddr -= 0x8000;
+                ch.bank++;
+            }
+
+            if (step > 0) {
                 if (pcmPtr != null) {
                     int globalOffset = (ch.bank * 0x8000) + (ch.pcmAddr & 0x7FFF);
                     currentSample = pcmPtr.read8(globalOffset) & 0xFF;
                 }
                 
-                ch.pcmAddr++;
-                if (ch.pcmAddr >= 0x10000) { 
-                    ch.pcmAddr = 0x8000;
-                    ch.bank++;
-                }
-
-                ch.stepsRemaining--;
+                // Decrement duration steps
+                ch.stepsRemaining -= step;
                 if (ch.stepsRemaining <= 0) {
                      ch.active = false;
                      return -999;
                 }
             } else {
-                 if (pcmPtr != null) {
-                     int globalOffset = (ch.bank * 0x8000) + (ch.pcmAddr & 0x7FFF);
-                     currentSample = pcmPtr.read8(globalOffset) & 0xFF;
-                 }
+                // If step is 0 (holding sample), we still need to output the *current* sample?
+                // But loop iteration output depends on 'currentSample'. 
+                // If checking 'step > 0' prevents reading, 'currentSample' remains 0 (or previous?).
+                // We should initialize 'currentSample' with actual current sample if hold?
+                // But simplified: assuming we read at least once or reuse previous?
+                // 'currentSample' is local var init to 0. 
+                // If step==0 all loops, silence?
+                // Actually, if holding, we should output the sample at current address.
+                
+                if (pcmPtr != null) {
+                    int globalOffset = (ch.bank * 0x8000) + (ch.pcmAddr & 0x7FFF);
+                    currentSample = pcmPtr.read8(globalOffset) & 0xFF;
+                }
             }
-        }
-        
+
         
         int finalVolAddr = (vol << 8) | currentSample; 
         byte ret = z80Ram[finalVolAddr];

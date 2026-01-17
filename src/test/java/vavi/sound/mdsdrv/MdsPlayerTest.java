@@ -155,7 +155,7 @@ public class MdsPlayerTest {
             }
         };
 
-        MdsPcm pcm = new MdsPcm(driver, sampleRate);
+        MdsPcm pcm = new MdsPcm(driver.z80RamBuffer, sampleRate);
         pcm.setFmCallback(datum -> {
              if (datum.port == 0) {
                  fm.write(0, datum.address); // 0x2A
@@ -203,7 +203,7 @@ public class MdsPlayerTest {
             
             // PCM Update (per sample)
             if (workArea.w_pcm_ptr != null) {
-                pcm.update(workArea.w_pcm_ptr, workArea);
+                pcm.update(workArea.w_pcm_ptr);
             }
             
             // Chip Updates (1 sample)

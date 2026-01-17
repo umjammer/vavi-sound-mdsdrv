@@ -9,7 +9,6 @@ package vavi.sound.mdsdrv.driver;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
@@ -56,16 +55,6 @@ public class MdsDriver extends MdsDrv implements IDriver {
                 this.writePSG = chipsConsumer.get(1)::writeRegister;
 logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.writePSG);
             }
-            if (chipsConsumer.size() > 2) {
-                this.writePCM = chipsConsumer.get(2)::writeRegister;
-logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePCM set: " + this.writePCM);
-            }
-        }
-        if (additionalOption != null && additionalOption.length > 1 && additionalOption[1] instanceof Consumer workReader) {
-            this.workReader = workReader;
-logger.log(Level.INFO, "workReader: " + workReader);
-        } else {
-logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
         }
 
         // Convert MmlDatum[] to byte array for Memory
@@ -112,7 +101,7 @@ logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
 
         Memory memory = new ByteArrayMemory(data, 0);
         this.workArea = new WorkArea();
-        this.mdsPcm = new MdsPcm(this, 44100); // Default rate, updated in startRendering?
+        this.mdsPcm = new MdsPcm(this.z80RamBuffer, 44100); // Default rate, updated in startRendering?
         
         if (writeOPNA != null) this.mdsPcm.setFmCallback(writeOPNA);
 
@@ -123,8 +112,6 @@ logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
         } else {
             logger.log(Level.DEBUG, "MdsDrv init success");
         }
-
-        this.workReader.accept(workArea.w_pcm_ptr::read8);
 
         // Start Request (Request 1 = Play) - Default behavior
         // The player typically calls startMusic, but mds_init might need to be ready.
@@ -189,7 +176,7 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
     public void render() {
         if (workArea != null) {
             sampleCounter += 1.0;
-            if (mdsPcm != null) mdsPcm.update(workArea.w_pcm_ptr, workArea);
+            if (mdsPcm != null) mdsPcm.update(workArea.w_pcm_ptr);
 
             if (sampleCounter >= samplesPerFrame) {
                 sampleCounter -= samplesPerFrame;
@@ -324,25 +311,6 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
         public Memory add(int o) {
             return new ByteArrayMemory(data, offset + o);
         }
-    }
-
-    @Override
-    protected Memory getZ80Ram() {
-        return new Memory() {
-            @Override
-            public void write8(int addr, int val) {
-                writePCM.accept(new ChipDatum(0, addr, val & 0xff));
-            }
-            @Override public int read8(int addr) {
-//                return pcm.read(addr); // TODO create ChipAction for read
-                return 0;
-            }
-            @Override public void write16(int addr, int val) { write8(addr, val >> 8); write8(addr+1, val & 0xFF); }
-            @Override public void write32(int addr, int val) { write16(addr, val >> 16); write16(addr+2, val & 0xFFFF); }
-            @Override public int read16(int addr) { return (read8(addr) << 8) | read8(addr+1); }
-            @Override public int read32(int addr) { return (read16(addr) << 16) | read16(addr+2); }
-            @Override public Memory add(int o) { return null; }
-        };
     }
 
     @Override

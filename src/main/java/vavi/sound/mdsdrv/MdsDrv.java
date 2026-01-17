@@ -2107,9 +2107,12 @@ public class MdsDrv {
                     // add.b d3,d1                             <- if mode==3: d1 += d3 (BYTE op)
 
                     int pitch = t.t_pcm_pitch & 0xff;
+                    int pitchOrig = pitch;
+                    int count = 0;
+                    int len = t.t_pcm_length;
+
                     if (pitch != 0) {
                         int pitchDiv = pitch;
-                        int pitchOrig = pitch;
 
                         // Emulate BYTE add operations (8-bit wrapping)
                         pitchDiv = (pitchDiv * 2) & 0xff;  // add.b pitchDiv,pitchDiv
@@ -2122,17 +2125,21 @@ public class MdsDrv {
 
                         int calcPitch = pitchDiv; // This is the actual pitch divisor
 
-                        int len = t.t_pcm_length;
-                        int count = 0;
                         if (calcPitch != 0) {
                             count = len / calcPitch; // divu.w d1,d2
-                            count += 0x1ff;         // addi.w #$1ff,d2
                         }
-
+                    } else {
+                        // Pitch 0 = 1.0x speed -> 1 count per byte (or close enough)
+                        // Use divisor 1 (calcPitch = 1 implicitly)
+                        count = len; 
+                    }
+                    
+                    if (count > 0) {
+                        count += 0x1ff;         // addi.w #$1ff,d2
+                        
                         // Write count (word)
                         zram.write16(zPcmBase + MdDef.zp_count, count);
                         // Write pitch - write raw value directly like assembly does
-                        // Assembly line 3116: move.b d3,zp_pitch-zp_count(tmpa0) - d3 contains original pitch
                         zram.write8(zPcmBase + MdDef.zp_pitch, pitchOrig);
                     }
                     
@@ -3398,8 +3405,8 @@ public class MdsDrv {
                             // RIFF pcmh structure: +0-3="pcmh", +4-7=size, +8+=data
                             // So first data byte is at offset +8, which is the index field in current parsing
                             // Let's try reading the ACTUAL first byte of the chunk data
-                            int rateVal = (m.read8(lp+8) & 0xff);  // First data byte (currently reading as index)
-                            if (rateVal == 0) rateVal = 4; // Default to 17.5kHz (approx) if unspecified
+                            int rateVal = 0; // Default to 0 (Z80 will use 1.0x or previous)
+                            // if (rateVal == 0) rateVal = 4; // Removed default override to allow 1.0x speed
                             
                             // Construct PCM Header (8 bytes, matching assembly struct)
                             int addr = posVal + startVal;
