@@ -22,6 +22,7 @@ import musicDriverInterface.GD3Tag;
 import musicDriverInterface.IDriver;
 import musicDriverInterface.MmlDatum;
 import vavi.sound.mdsdrv.MdsDrv;
+import vavi.sound.mdsdrv.MdsPcm;
 import vavi.sound.mdsdrv.Memory;
 
 import static java.lang.System.getLogger;
@@ -38,6 +39,7 @@ public class MdsDriver extends MdsDrv implements IDriver {
     private static final Logger logger = getLogger(MdsDriver.class.getName());
 
     private WorkArea workArea;
+    private MdsPcm mdsPcm;
 
     // Chip write callbacks from IDriver consumers
     private Consumer<ChipDatum> writeOPNA; // Primary FM (YM2612 treated as OPNA/B/compat)
@@ -110,6 +112,9 @@ logger.log(Level.ERROR, "no workReader: " + Arrays.toString(additionalOption));
 
         Memory memory = new ByteArrayMemory(data, 0);
         this.workArea = new WorkArea();
+        this.mdsPcm = new MdsPcm(this, 44100); // Default rate, updated in startRendering?
+        
+        if (writeOPNA != null) this.mdsPcm.setFmCallback(writeOPNA);
 
         Memory pcmMemory = pcmData != null ? new ByteArrayMemory(pcmData) : null;
         int result = this.mds_init(workArea, memory, pcmMemory);
@@ -184,6 +189,8 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
     public void render() {
         if (workArea != null) {
             sampleCounter += 1.0;
+            if (mdsPcm != null) mdsPcm.update(workArea.w_pcm_ptr, workArea);
+
             if (sampleCounter >= samplesPerFrame) {
                 sampleCounter -= samplesPerFrame;
                 mds_update(workArea);

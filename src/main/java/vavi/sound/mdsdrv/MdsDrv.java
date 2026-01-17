@@ -281,7 +281,7 @@ public class MdsDrv {
         // Reg $22 = LFO control (0x00 = off, 0x08 = on with default freq)
         // Reg $2B = DAC enable (0x80 = DAC on for FM6/channel 5)
         write_fm_port0(0x22, 0x00);  // LFO off
-        write_fm_port0(0x2B, 0x00);  // DAC off (use FM synthesis for ch6)
+        write_fm_port0(0x2B, 0x80);  // DAC on (enable PCM output)
 
         // Key-off all FM channels to start clean
         for (int ch = 0; ch < 6; ch++) {
@@ -322,6 +322,7 @@ public class MdsDrv {
             a0.w_pcm_bank = 0;
         }
         a0.w_pcm_mode = 2;
+        getZ80Ram().write8(MdDef.z80_ram + 0x0e05, a0.w_pcm_mode);
 
         try {
             // InputStream is = MdsDrv.class.getResourceAsStream("/mdssub.bin");
@@ -607,6 +608,7 @@ public class MdsDrv {
 
     private void mds_set_pcm_mode(WorkArea a0, int d0) {
         a0.w_pcm_mode = (a0.w_pcm_mode & 0x10) | d0;
+        getZ80Ram().write8(MdDef.z80_ram + 0x0e05, a0.w_pcm_mode);
     }
 
     // Abstract IO and Memory methods
@@ -664,7 +666,7 @@ public class MdsDrv {
     }
 
     protected int getZVtabOffset() {
-        return 0x1000;
+        return 0x0F00;
     }
 
     public void mds_update(WorkArea a0) {
@@ -2132,7 +2134,6 @@ public class MdsDrv {
                         // Write pitch - write raw value directly like assembly does
                         // Assembly line 3116: move.b d3,zp_pitch-zp_count(tmpa0) - d3 contains original pitch
                         zram.write8(zPcmBase + MdDef.zp_pitch, pitchOrig);
-                        System.err.printf("MDS_PCM_PITCH: writing pitchOrig=%d%n", pitchOrig);
                     }
                     
                     // For now, let's assume standard format and try to populate likely fields
@@ -3287,9 +3288,10 @@ public class MdsDrv {
             d1 = (d1 - masterVol) & 0xff;
         }
 
-        // Step 3: Clamp to 0 if negative (signed comparison)
-        // Assembly: bmi.s @no_clamp; clr.b d1
-        if ((d1 & 0x80) != 0) {
+        // Step 3: Clamp to 0 if positive (signed comparison)
+        // Assembly: bmi.s @no_clamp (If negative, skip clear)
+        //           clr.b d1        (Else, clear to 0)
+        if ((d1 & 0x80) == 0) { // If bit 7 is clear (Positive)
             d1 = 0;
         }
 

@@ -9,8 +9,6 @@ import javax.sound.sampled.LineUnavailableException;
 import javax.sound.sampled.SourceDataLine;
 
 import vavi.sound.mdsdrv.MdsDrv.WorkArea;
-import vavi.sound.mdsdrv.chips.MdPcm;
-import vavi.sound.mdsdrv.instrument.MdPcmInst;
 import vavi.util.Debug;
 import vavi.util.properties.annotation.Property;
 import vavi.util.properties.annotation.PropsEntity;
@@ -42,14 +40,13 @@ public class MdsPlayerTest {
         if (localPropertiesExists()) {
             PropsEntity.Util.bind(this);
         }
-        // Allow system property to override file path
         String sysPropFile = System.getProperty("file");
         if (sysPropFile != null && !sysPropFile.isEmpty()) {
             file = sysPropFile;
         }
 
         System.setProperty("mdplayer.volume", "%4.2f".formatted(volume));
-Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("mdplayer.volume") + ", cwd: " + System.getProperty("user.dir") + ", time: " + time);
+        Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("mdplayer.volume") + ", cwd: " + System.getProperty("user.dir") + ", time: " + time);
     }
 
     @Test
@@ -62,7 +59,6 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
 
         System.out.println("Playing: " + mdsFile);
 
-        // Load MDS file into Memory
         byte[] mdsData = Files.readAllBytes(mdsFile);
         System.out.println("MDS File size: " + mdsData.length);
 
@@ -72,11 +68,8 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         if (mdsData.length >= 12 && mdsData[0] == 'R' && mdsData[1] == 'I' && mdsData[2] == 'F' && mdsData[3] == 'F' &&
                 mdsData[8] == 'M' && mdsData[9] == 'D' && mdsData[10] == 'S' && mdsData[11] == '0') {
 
-            // For RIFF MDS files, we pass the entire file and let driver parse from seq offset
-            // The seq chunk contains track data, while LIST/glob chunks contain instruments
             int p = 12;
             while (p < mdsData.length - 8) {
-                // Read Chunk ID
                 char c0 = (char)mdsData[p], c1 = (char)mdsData[p+1], c2 = (char)mdsData[p+2], c3 = (char)mdsData[p+3];
                 String chunkId = "" + c0 + c1 + c2 + c3;
                 int size = (mdsData[p + 4] & 0xFF) | ((mdsData[p + 5] & 0xFF) << 8) | ((mdsData[p + 6] & 0xFF) << 16)
@@ -85,67 +78,43 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                 System.out.println("RIFF chunk '" + chunkId + "' size=" + size + " at offset " + p);
                 
                 if (mdsData[p] == 's' && mdsData[p + 1] == 'e' && mdsData[p + 2] == 'q' && mdsData[p + 3] == ' ') {
-                    // Found seq chunk - pass entire file from seq data start
-                    // This includes seq data AND following LIST/glob chunks
                     seqOffset = p + 8;
                     int remainingSize = mdsData.length - seqOffset;
                     seqData = new byte[remainingSize];
                     System.arraycopy(mdsData, seqOffset, seqData, 0, remainingSize);
                     System.out.println("Extracted from seq offset: " + remainingSize + " bytes (seq + LIST chunks)");
                 }
-                // Pad byte if size is odd (RIFF standard)
                 if ((size & 1) != 0)
                     size++;
                 p += 8 + size;
             }
         }
 
-        // Create root memory
-        // Pass full RIFF file to driver (MdsDrv will parse chunks)
         Memory mdsMem = new ByteArrayMemory(mdsData, 0);
 
-        // Initialize Chips
         int sampleRate = 44100;
         mdsound.chips.Ym2612 fm = new mdsound.chips.Ym2612();
         mdsound.chips.Sn76489 psg = new mdsound.chips.Sn76489();
-        // Create PCM HLE chip
-        MdPcm pcm = new MdPcm();
 
-        // Clocks from MdsPlugin / standard
         int fmClock = 7670454;
         int psgClock = 3579545;
         
-        fm.init(fmClock, sampleRate, 0); // interpolation 0
+        fm.init(fmClock, sampleRate, 0); 
         psg.start(sampleRate, psgClock);
         psg.reset();
 
         WorkArea workArea = new WorkArea();
 
-        // Driver with overriden IO
         MdsDrv driver = new MdsDrv() {
             @Override
             protected void write_fm_port0(int addr, int data) {
-                // Log Panning (B4-B6)
                 if (addr >= 0xB4 && addr <= 0xB6) {
                     System.err.printf("FM WR Pan: Reg=%02X Val=%02X%n", addr, data);
-                }
-                // Log DAC Mode (2B)
-                else if (addr == 0x2B) {
-                    System.err.printf("FM WR DAC Mode: Val=%02X%n", data);
-                }
-                // Log Ch2 TL (42, 46, 4A, 4E) - Bass
-                else if (addr == 0x42 || addr == 0x46 || addr == 0x4A || addr == 0x4E) {
+                } else if (addr == 0x2B) {
+                    System.err.printf("FM WR DAC Mode (Reg 2B): Val=%02X%n", data);
+                } else if (addr == 0x42 || addr == 0x46 || addr == 0x4A || addr == 0x4E) {
                      System.err.printf("FM WR Ch2 TL: Reg=%02X Val=%02X%n", addr, data);
-                }
-                // Log Ch5 TL (41+4, 45+4... -> 45, 49, 4D, 51 -> Wait Ch 5 is FM6)
-                // FM6 is Ch 2 on Port 1?
-                // MdsDrv writes to port 1 for Ch 3,4,5.
-                // Ch 5 (User Ch 6) is FM6.
-                // Registers 0x42, 0x46... on Port 1.
-                
-                else if (addr == 0x28) { // Key On
-                     int ch = data & 0x07;
-                     // Log for Ch 0, 1, 2, 5 (last one needs port check)
+                } else if (addr == 0x28) { 
                      System.err.printf("FM WR KeyOp: Val=%02X%n", data);
                 }
                 
@@ -155,7 +124,6 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
 
             @Override
             protected void write_fm_port1(int addr, int data) {
-                // Log ALL writes in VGM format for comparison
                 System.err.printf("01, %02X, %02X%n", addr, data);
                 fm.write(2, addr);
                 fm.write(3, data);
@@ -163,26 +131,9 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
 
             @Override
             protected void writeIo(int port, int data) {
-                // Debug: System.out.printf("IO: %02x %02x%n", port, data);
             }
 
-            @Override
-            protected Memory getZ80Ram() {
-                return new Memory() {
-                    @Override
-                    public void write8(int addr, int val) {
-                        pcm.write(addr, val);
-                    }
-                    @Override public int read8(int addr) {
-                        return pcm.read(addr);
-                    }
-                    @Override public void write16(int addr, int val) { write8(addr, val >> 8); write8(addr+1, val & 0xFF); }
-                    @Override public void write32(int addr, int val) { write16(addr, val >> 16); write16(addr+2, val & 0xFFFF); }
-                    @Override public int read16(int addr) { return (read8(addr) << 8) | read8(addr+1); }
-                    @Override public int read32(int addr) { return (read16(addr) << 16) | read16(addr+2); }
-                    @Override public Memory add(int o) { return null; }
-                };
-            }
+
 
             @Override
             protected Memory getPsgMemory() {
@@ -190,7 +141,6 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
                 return new Memory() {
                     @Override public void write8(int addr, int data) {
                         if (addr == 0xC00011) {
-                            // System.out.printf("PSG: %02x%n", data);
                             psg.write(data);
                         }
                         else wrapped.write8(addr, data);
@@ -205,26 +155,26 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
             }
         };
 
-        driver.mds_top(workArea, mdsMem, null); // Initialize driver
-
-        // After driver initialization, w_pcm_ptr is available
-        // Set up workReader for MdPcm to read PCM samples
-        pcm.setWorkReader(addr -> {
-            if (workArea.w_pcm_ptr != null) {
-                return workArea.w_pcm_ptr.read8(addr);
-            }
-            return 0;
+        MdsPcm pcm = new MdsPcm(driver, sampleRate);
+        pcm.setFmCallback(datum -> {
+             if (datum.port == 0) {
+                 fm.write(0, datum.address); // 0x2A
+                 fm.write(1, datum.data);
+             }
         });
 
-        driver.mds_request(workArea, 1, 0); // Request song 1
+        driver.mds_top(workArea, mdsMem, mdsMem); 
 
-        // Audio Output setup
-        int updateRate = 60; // 60Hz update (VBL)
-        int samplesPerStep = sampleRate / updateRate; 
-        int[][] fmBuf = new int[2][samplesPerStep];
-        int[][] psgBuf = new int[2][samplesPerStep];
-        int[][] pcmBuf = new int[2][samplesPerStep];
-        byte[] mixBuf = new byte[samplesPerStep * 4]; // 16bit stereo
+        driver.mds_request(workArea, 1, 0); 
+
+        int updateRate = 60; 
+        double samplesPerFrame = (double)sampleRate / updateRate;
+        double frameAccumulator = 0;
+        
+        int[][] fmBuf = new int[2][1];
+        int[][] psgBuf = new int[2][1];
+        byte[] chunk = new byte[4096];
+        int chunkPos = 0;
         
         AudioFormat format = new AudioFormat(sampleRate, 16, 2, true, false);
         SourceDataLine line = null;
@@ -241,46 +191,56 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         System.out.println("Rendering audio...");
         long start = System.currentTimeMillis();
 
-        // Render loop (e.g. 10 seconds)
-        for (int frame = 0; frame < updateRate * time; frame++) {
-            driver.mds_update(workArea);
-
-            // Clear buffers
-            mdsound.chips.Ym2612.clearBuffer(fmBuf, samplesPerStep);
-            for (int i = 0; i < samplesPerStep; i++) {
-                psgBuf[0][i] = 0;
-                psgBuf[1][i] = 0;
+        long totalSamples = time * sampleRate;
+        for (long i = 0; i < totalSamples; i++) {
+            
+            // Sequencer Update (approx 60Hz)
+            frameAccumulator += 1.0;
+            if (frameAccumulator >= samplesPerFrame) {
+                frameAccumulator -= samplesPerFrame;
+                driver.mds_update(workArea);
             }
-
-            // Update Chips
-            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipFm", "false")))
-                fm.update(fmBuf, samplesPerStep);
+            
+            // PCM Update (per sample)
+            if (workArea.w_pcm_ptr != null) {
+                pcm.update(workArea.w_pcm_ptr, workArea);
+            }
+            
+            // Chip Updates (1 sample)
+            fmBuf[0][0] = 0; fmBuf[1][0] = 0;
+            psgBuf[0][0] = 0; psgBuf[1][0] = 0;
+            
+            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipFm", "false"))) {
+                fm.update(fmBuf, 1);
+                fm.updateDacAndTimers(fmBuf, 1);
+            }
             if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPsg", "false")))
-                psg.update(psgBuf, samplesPerStep);
-            if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcm", "false")))
-                pcm.update(pcmBuf, samplesPerStep);
+                psg.update(psgBuf, 1);
+            
+            // Mix
+            int L = fmBuf[0][0] + psgBuf[0][0];
+            int R = fmBuf[1][0] + psgBuf[1][0];
 
-            for (int i = 0; i < samplesPerStep; i++) {
+            L = Math.max(-32768, Math.min(32767, L));
+            R = Math.max(-32768, Math.min(32767, R));
 
-                int L = fmBuf[0][i] + psgBuf[0][i] + pcmBuf[0][i];
-                int R = fmBuf[1][i] + psgBuf[1][i] + pcmBuf[1][i];
-
-                // Clamp 16-bit
-                L = Math.max(-32768, Math.min(32767, L));
-                R = Math.max(-32768, Math.min(32767, R));
-
-                mixBuf[i * 4 + 0] = (byte) (L & 0xff);
-                mixBuf[i * 4 + 1] = (byte) ((L >> 8) & 0xff);
-                mixBuf[i * 4 + 2] = (byte) (R & 0xff);
-                mixBuf[i * 4 + 3] = (byte) ((R >> 8) & 0xff);
-            }
-
-            if (line != null) {
-                line.write(mixBuf, 0, mixBuf.length);
+            chunk[chunkPos++] = (byte) (L & 0xff);
+            chunk[chunkPos++] = (byte) ((L >> 8) & 0xff);
+            chunk[chunkPos++] = (byte) (R & 0xff);
+            chunk[chunkPos++] = (byte) ((R >> 8) & 0xff);
+            
+            if (chunkPos >= chunk.length) {
+                if (line != null) {
+                    line.write(chunk, 0, chunk.length);
+                }
+                chunkPos = 0;
             }
         }
         
         if (line != null) {
+            if (chunkPos > 0) {
+                 line.write(chunk, 0, chunkPos);
+            }
             line.drain();
             line.close();
         }
@@ -288,7 +248,6 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
         System.out.println("Render complete. Time: " + (System.currentTimeMillis() - start) + "ms");
     }
 
-    // Helper class for Memory backed by byte array
     static class ByteArrayMemory implements Memory {
         private final byte[] data;
         private final int offset;
@@ -312,7 +271,7 @@ Debug.println("volume: " + volume + ", player.volume: " + System.getProperty("md
             int pos = offset + addr;
             if (pos >= 0 && pos < data.length - 1) {
                 int b1 = data[pos] & 0xFF;
-                int b2 = data[pos + 1] & 0xFF; // Big Endian (68k)
+                int b2 = data[pos + 1] & 0xFF; 
                 return (b1 << 8) | b2;
             }
             return 0;
