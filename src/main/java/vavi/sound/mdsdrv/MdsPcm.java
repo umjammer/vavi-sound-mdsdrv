@@ -1,7 +1,7 @@
 package vavi.sound.mdsdrv;
 
 import java.lang.System.Logger;
-import java.lang.System.Logger.Level;
+
 import java.util.function.Consumer;
 
 import musicDriverInterface.ChipDatum;
@@ -30,16 +30,12 @@ public class MdsPcm {
     private static final int ZP_BANK = 3;
     private static final int ZP_ADDR = 4;
 
-    private static final int Z_VTAB = 0x0f00;
-
     // Internal state for playback
     private static class ChannelState {
-        int id; // 0, 1, 2
         boolean active;
         int pcmAddr; // current offset in bank (0-7FFF)
         int bank;
         int pitch;
-        int volume;
         int stepsRemaining; 
         int subAccumulator; // DDA accumulator (was pitIndex)
     }
@@ -54,7 +50,6 @@ public class MdsPcm {
         this.z80Ram = z80Ram;
         for (int i = 0; i < 3; i++) {
             channels[i] = new ChannelState();
-            channels[i].id = i;
         }
         this.hostSampleRate = sampleRate;
     }
@@ -108,7 +103,7 @@ public class MdsPcm {
                 
                 if (mixedSample < -128) mixedSample = -128;
                 
-                // logger.log(Level.INFO, "PCM Sample: " + mixedSample);
+                // logger.log(Level.TRAE, "PCM Sample: " + mixedSample);
 
                 if (fmCallback != null) {
                     // Convert signed (-128..127) to unsigned (0..255) for YM2612 DAC
@@ -134,15 +129,19 @@ public class MdsPcm {
             int pitch = z80Ram[zOffset + ZP_PITCH] & 0xFF;
             if (pitch != 0) ch.pitch = pitch;
             
-            // Log KeyOn event
-            logger.log(Level.INFO, String.format("MdsPcm: KeyOn Ch=%d Bank=%02x Addr=%04x Pitch=%02x Mode=%d", chIdx, ch.bank, ch.pcmAddr, ch.pitch, mode));
+
 
             z80Ram[zOffset + ZP_KEY_ON] = 0;
             ch.subAccumulator = 0;
             ch.active = true;
+             ch.subAccumulator = 0;
+            ch.active = true;
              int cntL = z80Ram[zOffset + 6] & 0xFF;
              int cntH = z80Ram[zOffset + 7] & 0xFF;
-             ch.stepsRemaining = (cntH << 8) | cntL;
+             int rawCount = (cntH << 8) | cntL;
+             
+             // rawCount is Z80 Ticks (Loops).
+             ch.stepsRemaining = rawCount;
         }
 
         ChannelState ch = channels[chIdx];
@@ -155,9 +154,17 @@ public class MdsPcm {
             return -999;
         }
         
-        // Pitch processing using DDA (matching Z80 driver table logic)
-        // Rate = 0x10 + (pitch * 2) -> 1.0x to 2.0x
-        int rate = 0x10 + (ch.pitch * 2);
+        // Pitch processing using DDA
+        // Pitch Index corresponds to ~4kHz steps (1=4k, 2=8k, 4=16k etc.)
+        int targetHz = ch.pitch * 4000;
+        if (targetHz == 0) targetHz = 4000; // Safeguard
+        
+        // Z80 Driver Loop Rate (Approximate)
+        double z80Rate = (mode == 3) ? 13500.0 : 18000.0;
+        
+        // rate (fixed point 12.4) = (TargetHz / Z80Hz) * 16
+        int rate = (int) ((targetHz * 16.0) / z80Rate);
+        if (rate == 0) rate = 1; // Minimum speed
 
         int currentSample = 0;
         
@@ -173,32 +180,16 @@ public class MdsPcm {
                 ch.bank++;
             }
 
-            if (step > 0) {
-                if (pcmPtr != null) {
-                    int globalOffset = (ch.bank * 0x8000) + (ch.pcmAddr & 0x7FFF);
-                    currentSample = pcmPtr.read8(globalOffset) & 0xFF;
-                }
-                
-                // Decrement duration steps
-                ch.stepsRemaining -= step;
-                if (ch.stepsRemaining <= 0) {
-                     ch.active = false;
-                     return -999;
-                }
-            } else {
-                // If step is 0 (holding sample), we still need to output the *current* sample?
-                // But loop iteration output depends on 'currentSample'. 
-                // If checking 'step > 0' prevents reading, 'currentSample' remains 0 (or previous?).
-                // We should initialize 'currentSample' with actual current sample if hold?
-                // But simplified: assuming we read at least once or reuse previous?
-                // 'currentSample' is local var init to 0. 
-                // If step==0 all loops, silence?
-                // Actually, if holding, we should output the sample at current address.
-                
-                if (pcmPtr != null) {
-                    int globalOffset = (ch.bank * 0x8000) + (ch.pcmAddr & 0x7FFF);
-                    currentSample = pcmPtr.read8(globalOffset) & 0xFF;
-                }
+            if (pcmPtr != null) {
+                int globalOffset = (ch.bank * 0x8000) + (ch.pcmAddr & 0x7FFF);
+                currentSample = pcmPtr.read8(globalOffset) & 0xFF;
+            }
+            
+            // Decrement duration steps (Ticks), not bytes
+            ch.stepsRemaining--;
+            if (ch.stepsRemaining <= 0) {
+                 ch.active = false;
+                 return -999;
             }
 
         

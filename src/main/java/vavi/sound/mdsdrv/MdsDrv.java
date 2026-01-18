@@ -276,6 +276,12 @@ public class MdsDrv {
         psg.write8(MdDef.sound_psg, 0xbf); // Ch 1 Vol 15
         psg.write8(MdDef.sound_psg, 0xdf); // Ch 2 Vol 15
         psg.write8(MdDef.sound_psg, 0xff); // Ch 3 Vol 15
+        
+        // Ensure PCM KeyOn is cleared
+        Memory zram = getZ80Ram();
+        zram.write8(MdDef.z80_ram + 0x0E08, 0); // Z_PCM1 KeyOn
+        zram.write8(MdDef.z80_ram + 0x0E08 + 8, 0); // Z_PCM2 KeyOn
+        zram.write8(MdDef.z80_ram + 0x0E08 + 16, 0); // Z_PCM3 KeyOn
 
         // Initialize FM LFO and DAC enable registers
         // Reg $22 = LFO control (0x00 = off, 0x08 = on with default freq)
@@ -289,7 +295,7 @@ public class MdsDrv {
             write_fm_port0(0x28, slot);  // Key off (operator mask = 0)
         }
 
-        logger.log(Level.INFO, "mds_init complete");
+        logger.log(Level.DEBUG, "mds_init complete");
 
         writeIo(MdDef.z80_reset, 0x000);
         for (int i = 0; i < 20; i++)
@@ -350,7 +356,8 @@ public class MdsDrv {
             // if Java PCM code uses volume table, we should keep volume table init.
             // But we can remove the resource loading.
             Memory z80ram = getZ80Ram();
-
+            
+            // Standard Table: Index 0 = Max (256), Index 15 = Min (0).
             int[] volume_table = { 256, 203, 161, 128, 102, 81, 64, 51, 40, 32, 26, 20, 16, 13, 10, 0 };
             int z_vtab_offset = getZVtabOffset();
             int a1 = MdDef.z80_ram + z_vtab_offset;
@@ -1159,6 +1166,9 @@ public class MdsDrv {
                 // 00-7F: Rest with explicit length
                 twork.t_rest_time = cmd;
                 twork.t_counter = cmd;
+                if (cmd == 0) {
+                     logger.log(Level.DEBUG, "CMD 00: Rest 0 detected");
+                }
                 twork.t_note_flag |= (1 << nf_key_off);
                 twork.t_note_flag &= ~(1 << nf_key_on);
                 finishSeqCommand(a0, twork);
@@ -1232,8 +1242,7 @@ public class MdsDrv {
                         // we need to set t_position = subOffset so the next iteration reads from subOffset
                         twork.t_position = subOffset;
                     } catch (Exception e) {
-                        System.err.println("DRUM MODE ERROR: " + e.getMessage());
-                        e.printStackTrace();
+                        logger.log(Level.ERROR, "DRUM MODE ERROR: " + e.getMessage(), e);
                     }
                     continue;  // Process subroutine commands
                 }
@@ -1248,6 +1257,12 @@ public class MdsDrv {
 
             // 80: Rest (alternate) - uses previous rest time
             if (cmd == 0x80) {
+                logger.log(Level.DEBUG, String.format("CMD 80: RestTime=%d NoteTime=%d", twork.t_rest_time, twork.t_note_time));
+                if (twork.t_rest_time == 0 && twork.t_note_time != 0) {
+                     // Fallback: If rest time is 0, use note time (Robustness for passport.mds)
+                     twork.t_rest_time = twork.t_note_time;
+                     logger.log(Level.DEBUG, "CMD 80: Fallback applied");
+                }
                 twork.t_counter = twork.t_rest_time;
                 twork.t_note_flag |= (1 << nf_key_off);
                 twork.t_note_flag &= ~(1 << nf_key_on);
@@ -1710,6 +1725,7 @@ public class MdsDrv {
                         // Length is bytes 6-7 as 16-bit BE word (matching assembly move.w at +6)
                         twork.t_pcm_length = ((header[6] & 0xff) << 8) | (header[7] & 0xff);
                         
+
                         twork.t_channel_flag |= (1 << cf_pcm_control);
                         twork.t_note_flag |= (1 << nf_pcm_header) | (1 << nf_pcm_pitch);
                     } else {
@@ -1738,6 +1754,7 @@ public class MdsDrv {
                             }
                         } else if (pcmIdx == 0x0B) {
                              // Fallback for Kick (Index 0x0B)
+
                              twork.t_pcm_header = -1;  // Re-uses -1 logic IF NO MAP ENTRY
                              twork.t_pcm_pitch = 4;   
                              twork.t_pcm_length = 0x2000; 
@@ -2111,20 +2128,43 @@ public class MdsDrv {
                     int count = 0;
                     int len = t.t_pcm_length;
 
-                // Simplified Logic: Pass full length as byte count.
-                // MdsPcm.java will use 'pitch' to determine consumption rate (step size).
-                count = len; // count was declared at line 2111
-                // Note: We ignore the assembly's division logic because we don't know the exact Z80 loop mechanics.
-                // Treating count as 'Total Bytes' and decrementing by 'Bytes Consumed' in MdsPcm is robust.
-                    
-                    if (count > 0) {
-                        count += 0x1ff;         // addi.w #$1ff,d2
-                        
-                        // Write count (word)
-                        zram.write16(zPcmBase + MdDef.zp_count, count);
-                        // Write pitch - write raw value directly like assembly does
-                        zram.write8(zPcmBase + MdDef.zp_pitch, pitchOrig);
-                    }
+                // Restoring Assembly logic completely, but with safeguard for Pitch=0
+                count = 0;
+                // Actually 'int pitch' was declared at line 2109.
+                // We reset it here if needed, or just use it.
+                pitch = pitchOrig;
+
+                int pitchDiv = pitch;
+                // Emulate BYTE add operations (8-bit wrapping)
+                // pitchDiv = pitch * 4
+                pitchDiv = (pitchDiv * 2) & 0xff; 
+                pitchDiv = (pitchDiv * 2) & 0xff;
+
+                // Mode 3 check
+                if (((a0.w_pcm_mode & 0xF) - 3) == 0) {
+                    pitchDiv = (pitchDiv + pitchOrig) & 0xff;
+                }
+
+                int calcPitch = pitchDiv;
+
+                // FIX: If Pitch is 0 (as in passport.mds), calcPitch is 0. 
+                // Assembly crashes or relies on behavior we don't fully simulate.
+                // Pitch 0 logic: Default to 1.0x (16) to avoid Div/0 and ensure playback
+                if (calcPitch == 0) calcPitch = 16; 
+
+                if (calcPitch != 0) {
+                    count = len / calcPitch;
+                }
+                
+                
+                // Always add padding and write, as per assembly (no conditional check for count > 0 here)
+                count += 0x1ff;
+                
+                // Write count (word)
+                zram.write16(zPcmBase + MdDef.zp_count, count);
+                // Write pitch
+                zram.write8(zPcmBase + MdDef.zp_pitch, pitchOrig);
+
                     
                     // For now, let's assume standard format and try to populate likely fields
                     // If we see plausible addresses in dump, we can map them.
@@ -2132,11 +2172,17 @@ public class MdsDrv {
                     int bankAddr = pcmHeader.read32(2); // Guessing offset 2
                     zram.write32(zPcmBase + MdDef.zp_s_ptr, bankAddr);
                     */
+                    
+                    // Trigger Z80 Key On (Only if Pitch is valid/non-zero AND Count is valid)
+                    // Trigger Z80 Key On (Only if Pitch is valid/non-zero)
+                    // Assembly: tst.b d0; beq ...
+                    if (pitchOrig != 0) {
+                        zram.write8(zPcmBase + MdDef.zp_key_on, 1);
+                    }
                 }
             }
 
-            // Trigger Z80 Key On
-            zram.write8(zPcmBase + MdDef.zp_key_on, 1);
+
             // Set Vol (mds_z80_pcm_vol_start at line 3123)
             // Use mds_z80_get_vol for full volume calculation (assembly mds_z80_get_vol macro)
             int vol = mds_z80_get_vol(a0, t);
@@ -3287,10 +3333,13 @@ public class MdsDrv {
 
         // Step 4: Bitwise NOT
         // Assembly: not.b d1
+        // FIX: Restored inversion. Input 15 (Min?) -> ~15=0 (Max Index 0). Input 0 (Max?) -> ~0=15 (Min Index 15).
+        // Matches passport.mds usage where 15 seems to be Loud.
         d1 = (~d1) & 0xff;
 
         // Step 5: Mask to 4 bits and add 15
         // Assembly: moveq #15,d2; and.b d2,d1; add.b d2,d1
+        // We need Result 15 (Page 0x0F) for Max, and Result 30 (Page 0x1E) for Min.
         d1 = (d1 & 0x0f) + 15;
 
         return d1;
@@ -3327,13 +3376,13 @@ public class MdsDrv {
                 // ID check
                 // "seq " = 0x73 0x65 0x71 0x20
                 if (c0 == 's' && c1 == 'e' && c2 == 'q' && c3 == ' ') {
-                    logger.log(Level.INFO, "Found seq chunk at " + p + " size " + size);
+                    logger.log(Level.DEBUG, "Found seq chunk at " + p + " size " + size);
                     seqChunk = m.add(p + 8);
                 }
                 // "LIST" = 0x4C 0x49 0x53 0x54
                 else if (c0 == 'L' && c1 == 'I' && c2 == 'S' && c3 == 'T') {
                     // Parse LIST contents for glob
-                    logger.log(Level.INFO, "Found LIST chunk at " + p + " size " + size);
+                    logger.log(Level.DEBUG, "Found LIST chunk at " + p + " size " + size);
                     int listEnd = p + 8 + size;
                     int lp = p + 8;
                     // LIST type (4 bytes) e.g. "dblk"
@@ -3371,7 +3420,7 @@ public class MdsDrv {
                             // Debug dump first 30 bytes
                             StringBuilder sb = new StringBuilder(String.format("Glob %d @ offset 0x%04X stored: ", globIndex, lp + 12));
                             for (int i=0; i<Math.min(30, data.length); i++) sb.append(String.format("%02X ", data[i] & 0xff));
-                            logger.log(Level.INFO, sb.toString());
+                            logger.log(Level.DEBUG, sb.toString());
                         }
                         // "pcmh" = 0x70 0x63 0x6D 0x68
                         else if (sc0 == 'p' && sc1 == 'c' && sc2 == 'm' && sc3 == 'h') {
@@ -3388,39 +3437,33 @@ public class MdsDrv {
                             // RIFF pcmh structure: +0-3="pcmh", +4-7=size, +8+=data
                             // So first data byte is at offset +8, which is the index field in current parsing
                             // Let's try reading the ACTUAL first byte of the chunk data
-                            int rateVal = 0; // Default to 0 (Z80 will use 1.0x or previous)
-                            // if (rateVal == 0) rateVal = 4; // Removed default override to allow 1.0x speed
+                            // Rate/Pitch is at offset 24 (0x18) in the chunk data (observed from dump)
+                            int rateVal = (m.read8(lp+32) & 0xff) | ((m.read8(lp+33) & 0xff) << 8) | ((m.read8(lp+34) & 0xff) << 16) | ((m.read8(lp+35) & 0xff) << 24);
                             
+                            // Map Hz to Pitch Index (Approx 4kHz steps: 1=4k, 2=8k, 3=12k, 4=16k)
+                            int pitchIdx = 0;
+                            if (rateVal > 0) {
+                                pitchIdx = (rateVal + 2000) / 4000;
+                                if (pitchIdx == 0) pitchIdx = 1; // Minimum pitch 1 if rate exists
+                                if (pitchIdx > 8) pitchIdx = 8;  // Cap at 8 (32kHz) or similar reasonable limit
+                            }
+
                             // Construct PCM Header (8 bytes, matching assembly struct)
                             int addr = posVal + startVal;
 
-                            // Header structure matching assembly expectations:
-                            // The assembly code in mds_pcm_update reads 4 bytes at offset 0 with move.l
-                            // For address calculation: add.l d1,d1; lsr.w d1; ori.w #$8000,d1
-                            //
-                            // The 4-byte value is constructed to match seq-based headers
-                            // When transformed, should produce the correct Z80 address
-                            //
-                            // For addr=0x002000, after: << 1, >> 1 (low word), | 0x8000
-                            // We get Z80 addr in the range 0x8000-0xFFFF
-                            //
-                            // Store address + pitch as 4 bytes in Big Endian format
-                            // The pitch byte at offset 0 is also read by @cmd_pcm
-                            // When the 4-byte value is read for address calculation, the pitch byte is in the high byte
-                            // and gets shifted out during the transformation (add.l, lsr.w)
                             byte[] header = new byte[8];
-                            header[0] = (byte)rateVal;                  // Pitch/Rate at offset 0
+                            header[0] = (byte)pitchIdx;                 // Pitch Index at offset 0
                             header[1] = (byte)((addr >>> 16) & 0xff);  // High byte of address
                             header[2] = (byte)((addr >>> 8) & 0xff);   // Mid byte
                             header[3] = (byte)(addr & 0xff);           // Low byte of address
                             header[4] = 0;  // Padding
                             header[5] = 0;  // Padding
-                            // Length as 16-bit word at offset 6-7 (for assembly move.w after addq #6)
+                            // Length as 16-bit word at offset 6-7
                             header[6] = (byte)((sizeVal >>> 8) & 0xff);  // High byte of length
                             header[7] = (byte)(sizeVal & 0xff);          // Low byte of length
                             
+                            
                             a0.pcmHeaders.put(pcmIdx, header);
-                            logger.log(Level.INFO, String.format("Parsed pcmh idx=%d addr=%06X size=%04X rate=%d", pcmIdx, addr, sizeVal, rateVal));
                         }
                         
                         lp += 8 + subSize;
@@ -3429,7 +3472,7 @@ public class MdsDrv {
                 }
                 // "pcmd" = 0x70 0x63 0x6D 0x64
                 else if (c0 == 'p' && c1 == 'c' && c2 == 'm' && c3 == 'd') {
-                    logger.log(Level.INFO, "Found pcmd chunk at " + p + " size " + size);
+                    logger.log(Level.DEBUG, "Found pcmd chunk at " + p + " size " + size);
                     // Store in w_pcm_ptr
                     a0.w_pcm_ptr = m.add(p + 8);
                 }

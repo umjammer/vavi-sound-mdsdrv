@@ -141,7 +141,7 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
     @Override
     protected void write_fm_port0(int addr, int data) {
         if (writeOPNA != null) {
-//logger.log(Level.INFO, "%02X, %02X".formatted(addr, data));
+//logger.log(Level.TRACE, "%02X, %02X".formatted(addr, data));
             writeOPNA.accept(new ChipDatum(0, addr, data));
         }
     }

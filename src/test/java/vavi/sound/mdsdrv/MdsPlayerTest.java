@@ -203,7 +203,9 @@ public class MdsPlayerTest {
             
             // PCM Update (per sample)
             if (workArea.w_pcm_ptr != null) {
-                pcm.update(workArea.w_pcm_ptr);
+                if (!Boolean.parseBoolean(System.getProperty("vavi.sound.mdsdrv.skipPcFm", "false"))) {
+                    pcm.update(workArea.w_pcm_ptr);
+                }
             }
             
             // Chip Updates (1 sample)
