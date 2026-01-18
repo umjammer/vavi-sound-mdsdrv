@@ -23,15 +23,17 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 
 * https://github.com/uniskie/msx_music_data/tree/master/Mus-MGSDRV (.mds)
 * https://github.com/superctr/ctrmml (mml to .mds)
+* https://github.com/vladikcomper/MegaPCM
 
 ## TODO
 
 * compiler
 * ~~pcm~~
-* song loop is broken
-* psm drums has problems
-  * wrong timbre?
-  * no filter?
+* ~~song loop is broken~~
+* ~~psm drums has problems~~
+  * ~~wrong timbre?~~
+  * ~~no filter? dac?~~
+  * as for passport.mds, unnecessary one drum notes loops 
 
 ---
 
