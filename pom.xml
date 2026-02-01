@@ -58,7 +58,7 @@
     <dependency>
       <groupId>com.github.umjammer</groupId>
       <artifactId>vavi-sound-mdsound</artifactId>
-      <version>0.0.11</version>
+      <version>0.0.12</version>
     </dependency>
 
     <dependency>
