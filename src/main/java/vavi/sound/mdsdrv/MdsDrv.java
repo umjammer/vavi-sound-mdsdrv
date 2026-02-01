@@ -1774,9 +1774,12 @@ public class MdsDrv {
                 return 2;
 
             case 0xF5: // Jump (relative offset)
+                // Assembly (lines 1530-1535): reads offset, adds to cmdlen(3), then @next_command
+                // adds cmdlen to trackpos, reads from trackpos-1
+                // Result: destination = pos + 3 + offset (where pos is the F5 command position)
                 int jumpOffset = tbase.read16(pos + 1);
                 if ((jumpOffset & 0x8000) != 0) jumpOffset |= 0xFFFF0000;
-                twork.t_position = pos + 1 + jumpOffset;  
+                twork.t_position = pos + 3 + jumpOffset;  // Fixed: was pos + 1 + offset
                 return 0; 
             case 0xF6: // FM Register Write
                 {
@@ -3493,15 +3496,22 @@ public class MdsDrv {
     
     public static class ByteArrayMemory implements Memory {
         private final byte[] data;
+        private final int offset;
         
         public ByteArrayMemory(byte[] data) {
+            this(data, 0);
+        }
+
+        public ByteArrayMemory(byte[] data, int offset) {
             this.data = data;
+            this.offset = offset;
         }
 
         @Override
         public int read8(int addr) {
-            if (addr < 0 || addr >= data.length) return 0;
-            return data[addr] & 0xff;
+            int pos = offset + addr;
+            if (pos < 0 || pos >= data.length) return 0;
+            return data[pos] & 0xff;
         }
 
         @Override
@@ -3516,7 +3526,8 @@ public class MdsDrv {
 
         @Override
         public void write8(int addr, int d) {
-            if (addr >= 0 && addr < data.length) data[addr] = (byte)d;
+            int pos = offset + addr;
+            if (pos >= 0 && pos < data.length) data[pos] = (byte)d;
         }
 
         @Override
@@ -3532,13 +3543,8 @@ public class MdsDrv {
         }
 
         @Override
-        public Memory add(int offset) {
-            // Simplified slice
-            if (offset == 0) return this;
-            if (offset >= data.length) return new ByteArrayMemory(new byte[0]);
-            byte[] newData = new byte[data.length - offset];
-            System.arraycopy(data, offset, newData, 0, newData.length);
-            return new ByteArrayMemory(newData);
+        public Memory add(int o) {
+            return new ByteArrayMemory(data, offset + o);
         }
     }
 }

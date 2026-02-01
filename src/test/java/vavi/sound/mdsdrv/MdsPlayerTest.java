@@ -62,35 +62,13 @@ public class MdsPlayerTest {
         byte[] mdsData = Files.readAllBytes(mdsFile);
         System.out.println("MDS File size: " + mdsData.length);
 
-        // Check for RIFF header and extract Sequence Data
-        byte[] seqData = mdsData;
-        int seqOffset = 0;
-        if (mdsData.length >= 12 && mdsData[0] == 'R' && mdsData[1] == 'I' && mdsData[2] == 'F' && mdsData[3] == 'F' &&
-                mdsData[8] == 'M' && mdsData[9] == 'D' && mdsData[10] == 'S' && mdsData[11] == '0') {
-
-            int p = 12;
-            while (p < mdsData.length - 8) {
-                char c0 = (char)mdsData[p], c1 = (char)mdsData[p+1], c2 = (char)mdsData[p+2], c3 = (char)mdsData[p+3];
-                String chunkId = "" + c0 + c1 + c2 + c3;
-                int size = (mdsData[p + 4] & 0xFF) | ((mdsData[p + 5] & 0xFF) << 8) | ((mdsData[p + 6] & 0xFF) << 16)
-                        | ((mdsData[p + 7] & 0xFF) << 24);
-                
-                System.out.println("RIFF chunk '" + chunkId + "' size=" + size + " at offset " + p);
-                
-                if (mdsData[p] == 's' && mdsData[p + 1] == 'e' && mdsData[p + 2] == 'q' && mdsData[p + 3] == ' ') {
-                    seqOffset = p + 8;
-                    int remainingSize = mdsData.length - seqOffset;
-                    seqData = new byte[remainingSize];
-                    System.arraycopy(mdsData, seqOffset, seqData, 0, remainingSize);
-                    System.out.println("Extracted from seq offset: " + remainingSize + " bytes (seq + LIST chunks)");
-                }
-                if ((size & 1) != 0)
-                    size++;
-                p += 8 + size;
-            }
+        // Parse RIFF MDS data using shared utility
+        RiffMdsParser.ParseResult parsed = RiffMdsParser.parse(mdsData);
+        if (parsed.isRiff) {
+            System.out.println("Parsed RIFF file, seqOffset=" + parsed.seqOffset);
         }
 
-        Memory mdsMem = new ByteArrayMemory(mdsData, 0);
+        Memory mdsMem = new MdsDrv.ByteArrayMemory(mdsData, 0);
 
         int sampleRate = 44100;
         mdsound.chips.Ym2612 fm = new mdsound.chips.Ym2612();
@@ -248,57 +226,5 @@ public class MdsPlayerTest {
         }
         
         System.out.println("Render complete. Time: " + (System.currentTimeMillis() - start) + "ms");
-    }
-
-    static class ByteArrayMemory implements Memory {
-        private final byte[] data;
-        private final int offset;
-
-        public ByteArrayMemory(byte[] data, int offset) {
-            this.data = data;
-            this.offset = offset;
-        }
-
-        @Override
-        public int read8(int addr) {
-            int pos = offset + addr;
-            if (pos >= 0 && pos < data.length) {
-                return data[pos] & 0xFF;
-            }
-            return 0;
-        }
-
-        @Override
-        public int read16(int addr) {
-            int pos = offset + addr;
-            if (pos >= 0 && pos < data.length - 1) {
-                int b1 = data[pos] & 0xFF;
-                int b2 = data[pos + 1] & 0xFF; 
-                return (b1 << 8) | b2;
-            }
-            return 0;
-        }
-
-        @Override
-        public int read32(int addr) {
-            return (read16(addr) << 16) | read16(addr + 2);
-        }
-
-        @Override
-        public void write8(int addr, int val) {
-        }
-
-        @Override
-        public void write16(int addr, int val) {
-        }
-
-        @Override
-        public void write32(int addr, int val) {
-        }
-
-        @Override
-        public Memory add(int off) {
-            return new ByteArrayMemory(data, offset + off);
-        }
     }
 }
