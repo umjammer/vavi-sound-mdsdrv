@@ -229,7 +229,7 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
 
     @Override
     protected Memory getPsgMemory() {
-        final Memory wrapped = super.getPsgMemory();
+        Memory wrapped = super.getPsgMemory();
         return new Memory() {
             @Override public void write8(int addr, int data) {
                 if (addr == 0xC00011) {

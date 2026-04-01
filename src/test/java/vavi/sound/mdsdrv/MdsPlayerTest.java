@@ -115,7 +115,7 @@ public class MdsPlayerTest {
 
             @Override
             protected Memory getPsgMemory() {
-                final Memory wrapped = super.getPsgMemory();
+                Memory wrapped = super.getPsgMemory();
                 return new Memory() {
                     @Override public void write8(int addr, int data) {
                         if (addr == 0xC00011) {
@@ -201,8 +201,8 @@ public class MdsPlayerTest {
             int L = fmBuf[0][0] + psgBuf[0][0];
             int R = fmBuf[1][0] + psgBuf[1][0];
 
-            L = Math.max(-32768, Math.min(32767, L));
-            R = Math.max(-32768, Math.min(32767, R));
+            L = Math.clamp(L, -32768, 32767);
+            R = Math.clamp(R, -32768, 32767);
 
             chunk[chunkPos++] = (byte) (L & 0xff);
             chunk[chunkPos++] = (byte) ((L >> 8) & 0xff);

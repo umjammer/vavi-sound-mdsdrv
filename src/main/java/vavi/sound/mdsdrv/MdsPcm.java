@@ -40,7 +40,7 @@ public class MdsPcm {
         int subAccumulator; // DDA accumulator (was pitIndex)
     }
 
-    private ChannelState[] channels = new ChannelState[3];
+    private final ChannelState[] channels = new ChannelState[3];
     private double accumulator = 0;
     private double hostSampleRate = 44100.0;
 

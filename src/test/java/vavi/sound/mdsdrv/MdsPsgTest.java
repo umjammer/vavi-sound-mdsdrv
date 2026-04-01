@@ -17,8 +17,8 @@ public class MdsPsgTest {
 
     // Structure to hold PSG event with timing
     static class PsgEvent {
-        int timeMs;
-        int data;
+        final int timeMs;
+        final int data;
         PsgEvent(int timeMs, int data) {
             this.timeMs = timeMs;
             this.data = data;
@@ -53,13 +53,13 @@ public class MdsPsgTest {
         
         // Frame tracking: 1 frame ≈ 16.67ms at 60Hz (NTSC)
         final double MS_PER_FRAME = 1000.0 / 60.0;  // ~16.67ms
-        final int[] frameCount = {0};
+        int[] frameCount = {0};
         
         // Hook PSG writes and track timing
         driver = new MdsDrv() {
             @Override
             protected Memory getPsgMemory() {
-                final Memory wrapped = super.getPsgMemory();
+                Memory wrapped = super.getPsgMemory();
                 return new Memory() {
                     @Override public void write8(int addr, int data) {
                         if (addr == 0xC00011) {
@@ -86,7 +86,7 @@ public class MdsPsgTest {
         
         // Run for enough frames to match VGM timing
         // VGM max time we need (check last event)
-        int maxVgmTime = vgmEvents.isEmpty() ? 0 : vgmEvents.get(vgmEvents.size() - 1).timeMs;
+        int maxVgmTime = vgmEvents.isEmpty() ? 0 : vgmEvents.getLast().timeMs;
         int framesNeeded = (int)(maxVgmTime / MS_PER_FRAME) + 100;  // Extra frames for safety
         System.out.println("Max VGM time: " + maxVgmTime + "ms, running " + framesNeeded + " frames");
         
