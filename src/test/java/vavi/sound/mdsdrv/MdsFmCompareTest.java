@@ -21,9 +21,9 @@ public class MdsFmCompareTest {
      * Represents a single FM write operation: port, addr, data
      */
     static class FmWrite {
-        int port;
-        int addr;
-        int data;
+        final int port;
+        final int addr;
+        final int data;
 
         FmWrite(int port, int addr, int data) {
             this.port = port;

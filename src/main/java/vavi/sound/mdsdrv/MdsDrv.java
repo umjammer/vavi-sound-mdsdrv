@@ -5,7 +5,6 @@
 package vavi.sound.mdsdrv;
 
 import java.lang.System.Logger;
-import java.lang.System;
 import java.util.HashMap;
 import java.util.Map;
 import java.lang.System.Logger.Level;
@@ -25,7 +24,7 @@ public class MdsDrv {
     private static final Logger logger = getLogger(MdsDrv.class.getName());
 
     // Persistent Z80 RAM buffer - must exist for the lifetime of the driver
-    protected byte[] z80RamBuffer = new byte[0x2000];  // 8KB Z80 RAM
+    protected final byte[] z80RamBuffer = new byte[0x2000];  // 8KB Z80 RAM
 
     public static final int MDSDRV_VER = 0x0006;
     public static final int MDSDRV_MIN_VER = 0x0003;
@@ -112,11 +111,11 @@ public class MdsDrv {
         public int t_peg_delay;
         public int t_peg_pos;
 
-        public int[] t_stack = new int[TSTACK_COUNT];
+        public final int[] t_stack = new int[TSTACK_COUNT];
 
         public int t_fm_pan_lfo;
         public int t_fm_alg;
-        public int[] t_fm_tl = new int[4];
+        public final int[] t_fm_tl = new int[4];
 
         public int t_psg_eg_addr;
         public Memory t_psg_env_data; // Added for RIFF support
@@ -138,13 +137,13 @@ public class MdsDrv {
 
     public static class WorkArea {
         public Memory w_sdtop;
-        public int[] w_request = new int[RCOUNT];
-        public int[] w_tempo = new int[RCOUNT];
-        public int[] w_counter = new int[RCOUNT];
-        public int[] w_seq_step = new int[RCOUNT];
-        public int[] w_volume = new int[RCOUNT];
-        public int[] w_tmask = new int[RCOUNT];
-        public int[] w_chmask = new int[RCOUNT];
+        public final int[] w_request = new int[RCOUNT];
+        public final int[] w_tempo = new int[RCOUNT];
+        public final int[] w_counter = new int[RCOUNT];
+        public final int[] w_seq_step = new int[RCOUNT];
+        public final int[] w_volume = new int[RCOUNT];
+        public final int[] w_tmask = new int[RCOUNT];
+        public final int[] w_chmask = new int[RCOUNT];
 
         public int w_bgm_volume;
         public int w_se_volume;
@@ -162,15 +161,15 @@ public class MdsDrv {
         
         public int w_pointer_mode; // 0=Standard (Header+4), 1=Raw (Header+0)
         public int w_fm3_alg;
-        public int[] w_fm3_tl = new int[4];
+        public final int[] w_fm3_tl = new int[4];
 
 
         public int w_gtempo;
         
-        public Map<Integer, byte[]> globInstruments = new HashMap<>();
-        public Map<Integer, byte[]> pcmHeaders = new HashMap<>();
+        public final Map<Integer, byte[]> globInstruments = new HashMap<>();
+        public final Map<Integer, byte[]> pcmHeaders = new HashMap<>();
 
-        public TrackData[] w_track = new TrackData[TCOUNT];
+        public final TrackData[] w_track = new TrackData[TCOUNT];
 
         public WorkArea() {
             for (int i = 0; i < TCOUNT; i++) {
@@ -308,7 +307,7 @@ public class MdsDrv {
     }
 
     @SuppressWarnings("unused")
-    private int mds_init_error(WorkArea a0) {
+    private static int mds_init_error(WorkArea a0) {
         a0.w_sdtop = null;
         return -1;
     }
@@ -386,83 +385,82 @@ public class MdsDrv {
         if (d0 > 0x12)
             return 0;
 
-        switch (d0) {
-            case 0x00:
-                return get_cmd_count();
-            case 0x01:
-                return get_sound_count(a0);
-            case 0x02:
-                return get_status(a0, d1);
-            case 0x03:
-                return 0;
-            case 0x04:
-                return get_gtempo(a0);
-            case 0x05:
+        return switch (d0) {
+            case 0x00 -> get_cmd_count();
+            case 0x01 -> get_sound_count(a0);
+            case 0x02 -> get_status(a0, d1);
+            case 0x03 -> 0;
+            case 0x04 -> get_gtempo(a0);
+            case 0x05 -> {
                 set_gtempo(a0, d1);
-                return 0;
-            case 0x06:
-                return get_gvolume(a0);
-            case 0x07:
+                yield 0;
+            }
+            case 0x06 -> get_gvolume(a0);
+            case 0x07 -> {
                 set_gvolume(a0, d1);
-                return 0;
-            case 0x08:
+                yield 0;
+            }
+            case 0x08 -> {
                 write_fm_port0(d1, d2);
-                return 0;
-            case 0x09:
+                yield 0;
+            }
+            case 0x09 -> {
                 write_fm_port1(d1, d2);
-                return 0;
-            case 0x0a:
+                yield 0;
+            }
+            case 0x0a -> {
                 fade_bgm(a0, d1);
-                return 0;
-            case 0x0b:
+                yield 0;
+            }
+            case 0x0b -> {
                 set_pause(a0, d1, d2);
-                return 0;
-            case 0x0c:
-                return get_volume(a0, d1);
-            case 0x0d:
+                yield 0;
+            }
+            case 0x0c -> get_volume(a0, d1);
+            case 0x0d -> {
                 set_volume(a0, d1, d2);
-                return 0;
-            case 0x0e:
-                return get_tempo(a0, d1);
-            case 0x0f:
+                yield 0;
+            }
+            case 0x0e -> get_tempo(a0, d1);
+            case 0x0f -> {
                 set_tempo(a0, d1, d2);
-                return 0;
-            case 0x10:
-                return get_comm(a0);
-            case 0x11:
+                yield 0;
+            }
+            case 0x10 -> get_comm(a0);
+            case 0x11 -> {
                 set_pcmmode(a0, d1, d2);
-                return 0;
-            case 0x12:
-                return get_pcmmode(a0);
-        }
-        return 0;
+                yield 0;
+            }
+            case 0x12 -> get_pcmmode(a0);
+            default -> 0;
+        };
     }
 
-    private int get_cmd_count() {
+    private static int get_cmd_count() {
         return 0x12;
     }
 
-    private int get_sound_count(WorkArea a0) {
+    private static int get_sound_count(WorkArea a0) {
         return a0.w_sdtop.read16(-2);
     }
 
-    private int get_status(WorkArea a0, int d1) {
+    private static int get_status(WorkArea a0, int d1) {
         return a0.w_tmask[d1];
     }
 
-    private int get_gtempo(WorkArea a0) {
+    private static int get_gtempo(WorkArea a0) {
         return a0.w_gtempo;
     }
 
-    private void set_gtempo(WorkArea a0, int d1) {
+    private static void set_gtempo(WorkArea a0, int d1) {
         a0.w_gtempo = d1;
     }
 
-    private int get_gvolume(WorkArea a0) {
+    private static int get_gvolume(WorkArea a0) {
         return (a0.w_bgm_volume << 8) | a0.w_se_volume;
     }
 
-    private void set_gvolume(WorkArea a0, int d1) {
+    private static void set_gvolume(WorkArea a0, int d1) {
         a0.w_bgm_volume = (d1 >> 8) & 0xff;
         a0.w_se_volume = d1 & 0xff;
     }
@@ -490,7 +488,7 @@ public class MdsDrv {
         writeIo(MdDef.z80_bus_request, 0);
     }
 
-    private void fade_bgm(WorkArea a0, int d1) {
+    private static void fade_bgm(WorkArea a0, int d1) {
         a0.w_pcm_mode &= ~(1 << pe_fade_stop);
         int d0 = d1 & 0xff;
         if ((d1 & 0x80) != 0) {
@@ -505,7 +503,7 @@ public class MdsDrv {
         a0.w_fade_target = d0;
     }
 
-    private void set_pause(WorkArea a0, int d1, int d2) {
+    private static void set_pause(WorkArea a0, int d1, int d2) {
         int mask = a0.w_tmask[d1];
         for (int i = 0; i < TCOUNT; i++) {
             TrackData t = a0.w_track[i];
@@ -524,7 +522,7 @@ public class MdsDrv {
         }
     }
 
-    private int get_volume(WorkArea a0, int d1) {
+    private static int get_volume(WorkArea a0, int d1) {
         return (a0.w_volume[d1] >> 8) & 0xff;
     }
 
@@ -593,15 +591,15 @@ public class MdsDrv {
             mds_psg_vol_table[idx++] = 0x80;
     }
 
-    private int get_tempo(WorkArea a0, int d1) {
+    private static int get_tempo(WorkArea a0, int d1) {
         return a0.w_tempo[d1];
     }
 
-    private void set_tempo(WorkArea a0, int d1, int d2) {
+    private static void set_tempo(WorkArea a0, int d1, int d2) {
         a0.w_tempo[d1] = d2;
     }
 
-    private int get_comm(WorkArea a0) {
+    private static int get_comm(WorkArea a0) {
         return a0.w_comm;
     }
 
@@ -609,7 +607,7 @@ public class MdsDrv {
         mds_set_pcm_mode(a0, d1);
     }
 
-    private int get_pcmmode(WorkArea a0) {
+    private static int get_pcmmode(WorkArea a0) {
         return 0;
     }
 
@@ -760,7 +758,7 @@ public class MdsDrv {
         }
     }
 
-    private void mds_handle_request(WorkArea a0, int rnum, int reqdata) {
+    private static void mds_handle_request(WorkArea a0, int rnum, int reqdata) {
         a0.w_priority = 1;
         boolean stop = (reqdata & (1 << rf_stop)) != 0;
         reqdata &= ~(1 << rf_stop);
@@ -931,7 +929,7 @@ public class MdsDrv {
         }
     }
 
-    private void stop_song(WorkArea a0, int rnum, int reqdata) {
+    private static void stop_song(WorkArea a0, int rnum, int reqdata) {
         a0.w_request[rnum] = reqdata;
         int tmask = a0.w_tmask[rnum];
         for (int i = 0; i < TCOUNT; i++) {
@@ -952,7 +950,7 @@ public class MdsDrv {
         }
     }
 
-    private void mds_update_priority(WorkArea a0) {
+    private static void mds_update_priority(WorkArea a0) {
         a0.w_priority = 0;
         
         for (int tnum = 0; tnum < TCOUNT; tnum++) {
@@ -1100,7 +1098,7 @@ public class MdsDrv {
         }
     }
 
-    private void mds_update_fade(WorkArea a0) {
+    private static void mds_update_fade(WorkArea a0) {
         // Simple fade out logic implementation
         if (a0.w_fade_rate == 0)
             return;
@@ -1125,8 +1123,8 @@ public class MdsDrv {
         }
     }
 
-    private final int mds_chn_cmd_base = 0xE0;
-    private final int mds_note_start = 0x82;
+    private static final int mds_chn_cmd_base = 0xE0;
+    private static final int mds_note_start = 0x82;
 
     private static int debugCounter = 0;
 
@@ -1285,7 +1283,7 @@ public class MdsDrv {
     }
 
     /** Read note/tie length (Assembly lines 1076-1096) */
-    private void readNoteLength(TrackData twork, Memory tbase, int pos) {
+    private static void readNoteLength(TrackData twork, Memory tbase, int pos) {
         int cmd = tbase.read8(pos) & 0xff;
         if ((cmd & 0x80) != 0) {
             // Next byte is a command, use previous length
@@ -1459,20 +1457,20 @@ public class MdsDrv {
     }
     
     // Helper to get track variable by offset (Assembly line 1628: move.b 0(twork,d2),d3)
-    private int getTrackVariable(TrackData t, int offset) {
+    private static int getTrackVariable(TrackData t, int offset) {
         // Map offset to actual field - this is a simplified mapping
-        switch (offset) {
-            case 18: return t.t_vol;  // t_vol offset
-            case 40: return t.t_fm_tl[0];
-            case 41: return t.t_fm_tl[1];
-            case 42: return t.t_fm_tl[2];
-            case 43: return t.t_fm_tl[3];
-            default: return 0;
-        }
+        return switch (offset) {
+            case 18 -> t.t_vol;  // t_vol offset
+            case 40 -> t.t_fm_tl[0];
+            case 41 -> t.t_fm_tl[1];
+            case 42 -> t.t_fm_tl[2];
+            case 43 -> t.t_fm_tl[3];
+            default -> 0;
+        };
     }
     
     // Helper to set track variable by offset (Assembly line 1643: move.b d1,0(twork,d2))
-    private void setTrackVariable(TrackData t, int offset, int value) {
+    private static void setTrackVariable(TrackData t, int offset, int value) {
         switch (offset) {
             case 18: t.t_vol = value; break;
             case 40: t.t_fm_tl[0] = value; break;
@@ -1494,20 +1492,20 @@ public class MdsDrv {
      * 0xC0 (DT2/D2R) -> 0x70 (SR)
      * 0xE0 (D1L/RR)  -> 0x80 (SL/RR)
      */
-    private int opmToOpnReg(int reg) {
+    private static int opmToOpnReg(int reg) {
         if (reg < 0x40) return reg; // Pass through Keys/Flags/Test
         int base = reg & 0xE0; // Get top 3 bits (Block)
         int offset = reg & 0x1F;
-        
-        switch (base) {
-            case 0x40: return 0x30 + offset;
-            case 0x60: return 0x40 + offset;
-            case 0x80: return 0x50 + offset;
-            case 0xA0: return 0x60 + offset;
-            case 0xC0: return 0x70 + offset;
-            case 0xE0: return 0x80 + offset;
-            default: return reg;
-        }
+
+        return switch (base) {
+            case 0x40 -> 0x30 + offset;
+            case 0x60 -> 0x40 + offset;
+            case 0x80 -> 0x50 + offset;
+            case 0xA0 -> 0x60 + offset;
+            case 0xC0 -> 0x70 + offset;
+            case 0xE0 -> 0x80 + offset;
+            default -> reg;
+        };
     }
 
     private int execute_command(WorkArea a0, TrackData twork, Memory tbase, int pos, int cmd) {
@@ -1938,7 +1936,7 @@ public class MdsDrv {
         return 1;
     }
 
-    private void stop_track(TrackData t) {
+    private static void stop_track(TrackData t) {
         t.t_request_id = RCOUNT * 2;
     }
 
@@ -2582,7 +2580,7 @@ public class MdsDrv {
         writePsgVolume(a0, t, chVal, vol, psg);
     }
 
-    private void mds_psg_silence(TrackData t, int chVal, Memory psg) {
+    private static void mds_psg_silence(TrackData t, int chVal, Memory psg) {
         t.t_psg_eg_pos = 0xff;
         t.t_psg_eg_delay = 0x0f;
         t.t_channel_flag &= ~(1 << cf_key_on);
@@ -2738,7 +2736,7 @@ public class MdsDrv {
         }
     }
 
-    private int mds_pitch_update(WorkArea a0, TrackData t) {
+    private static int mds_pitch_update(WorkArea a0, TrackData t) {
         // Assembly (lines 1989-2028): Calculate base pitch from note + transpose + detune
         // CRITICAL: t_trs is a SIGNED byte. Must sign-extend before using
         int trs = (byte) t.t_trs;  // Cast to byte to sign-extend (0xF0 becomes -16, not 240)
@@ -2869,7 +2867,7 @@ public class MdsDrv {
         return pitch;
     }
 
-    private int mds_get_fm_pitch(TrackData t, int pitch) {
+    private static int mds_get_fm_pitch(TrackData t, int pitch) {
         // Assembly (lines 1887-1907):
         // lsl.l #8,d0         ; pitch << 8
         // move.w d0,d1        ; d1 = fraction (low word after shift = original pitch's low byte shifted)
@@ -2918,7 +2916,7 @@ public class MdsDrv {
         return (freqLow << 8) | ((freqHigh + octave) & 0xff);
     }
 
-    private int mds_get_psg_pitch(TrackData t, int pitch) {
+    private static int mds_get_psg_pitch(TrackData t, int pitch) {
         int note = (pitch >> 8) & 0xff;
         int fraction = pitch & 0xff;
         int freq = 0;
@@ -3054,7 +3052,7 @@ public class MdsDrv {
         // 4 bytes of TL (24-27)
         // 1 byte Alg (28)
         // 1 byte Trs (29)
-        final int[] regBases = { 0x30, 0x50, 0x60, 0x70, 0x80, 0x90 };
+        int[] regBases = { 0x30, 0x50, 0x60, 0x70, 0x80, 0x90 };
         int dataPtr = 0; // Start at 0
 
         StringBuilder envLog = new StringBuilder();
@@ -3296,7 +3294,7 @@ public class MdsDrv {
             // Let's implement a lookup function instead of a massive array if possible.
     };
 
-    private byte mds_psg_convert_vol(int vol) {
+    private static byte mds_psg_convert_vol(int vol) {
         if (vol < 0)
             vol = 0;
         if (vol >= mds_psg_vol_table_raw.length)
@@ -3308,7 +3306,7 @@ public class MdsDrv {
      * Calculate PCM volume for Z80 - equivalent to assembly's mds_z80_get_vol macro.
      * Assembly reference: mdssub.inc:85-98
      */
-    private int mds_z80_get_vol(WorkArea a0, TrackData t) {
+    private static int mds_z80_get_vol(WorkArea a0, TrackData t) {
         int d1 = t.t_vol & 0xff;
 
         // Step 1: Table lookup if bit 7 NOT set
@@ -3348,7 +3346,7 @@ public class MdsDrv {
         return d1;
     }
 
-    private Memory parseRiffMds(WorkArea a0, Memory m) {
+    private static Memory parseRiffMds(WorkArea a0, Memory m) {
         // Simple RIFF parser to find seq and LIST chunks
         // Scans forward using read8 (assuming Little Endian for chunk sizes)
         int p = 12; // Skip RIFF header

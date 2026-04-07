@@ -317,7 +317,7 @@ public class MdsSeqTest {
         byte[] data = asm.compile();
         
         Memory mem = new Memory() {
-            byte[] d = data;
+            final byte[] d = data;
             @Override public int read8(int a) { return (a >= 0 && a < d.length) ? d[a] & 0xff : 0; }
             @Override public int read16(int a) { return (read8(a) << 8) | read8(a+1); }
             @Override public int read32(int a) { return (read16(a) << 16) | read16(a+2); }
@@ -343,7 +343,7 @@ public class MdsSeqTest {
             
             @Override
             protected Memory getPsgMemory() {
-                final Memory wrapped = super.getPsgMemory();
+                Memory wrapped = super.getPsgMemory();
                 return new Memory() {
                     @Override public void write8(int addr, int data) {
                         if (addr == 0xC00011) {
@@ -385,8 +385,8 @@ public class MdsSeqTest {
     
     // Helper for memory offsets
     static class OffsetMemory implements Memory {
-        Memory parent;
-        int base;
+        final Memory parent;
+        final int base;
         public OffsetMemory(Memory p, int b) { parent=p; base=b; }
         @Override public int read8(int a) { return parent.read8(base + a); }
         @Override public int read16(int a) { return parent.read16(base + a); }
@@ -398,9 +398,9 @@ public class MdsSeqTest {
     }
     
     static class TestAssembler {
-        private List<Byte> buffer = new ArrayList<>();
-        private Map<String, Integer> labels = new HashMap<>();
-        private List<Patch> patches = new ArrayList<>();
+        private final List<Byte> buffer = new ArrayList<>();
+        private final Map<String, Integer> labels = new HashMap<>();
+        private final List<Patch> patches = new ArrayList<>();
         
         void label(String name) {
             labels.put(name, buffer.size());
@@ -472,10 +472,10 @@ public class MdsSeqTest {
         }
         
         static class Patch {
-            int offset;
-            int size;
-            String target;
-            String base;
+            final int offset;
+            final int size;
+            final String target;
+            final String base;
             public Patch(int o, int s, String t, String b) { offset=o; size=s; target=t; base=b; }
         }
     }

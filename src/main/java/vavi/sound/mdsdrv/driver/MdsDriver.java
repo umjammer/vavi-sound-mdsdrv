@@ -17,7 +17,7 @@ import dotnet4j.io.Stream;
 import dotnet4j.util.compat.Tuple;
 import musicDriverInterface.ChipAction;
 import musicDriverInterface.ChipDatum;
-import musicDriverInterface.GD3Tag;
+import musicDriverInterface.MetaData;
 import musicDriverInterface.IDriver;
 import musicDriverInterface.MmlDatum;
 import vavi.sound.mdsdrv.MdsDrv;
@@ -223,13 +223,13 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
         return 0;
     }
 
-    public GD3Tag getGD3TagInfo(byte[] srcBuf) {
-        return new GD3Tag();
+    public MetaData getMetaData(byte[] srcBuf) {
+        return new MetaData();
     }
 
     @Override
     protected Memory getPsgMemory() {
-        final Memory wrapped = super.getPsgMemory();
+        Memory wrapped = super.getPsgMemory();
         return new Memory() {
             @Override public void write8(int addr, int data) {
                 if (addr == 0xC00011) {

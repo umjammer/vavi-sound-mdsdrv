@@ -1,7 +1,7 @@
 [![Release](https://jitpack.io/v/umjammer/vavi-sound-mdsdrv.svg)](https://jitpack.io/#umjammer/vavi-sound-mdsdrv)
 [![Java CI](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/maven.yml/badge.svg)](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/maven.yml)
 [![CodeQL](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/codeql.yml/badge.svg)](https://github.com/umjammer/vavi-sound-mdsdrv/actions/workflows/codeql.yml)
-![Java](https://img.shields.io/badge/Java-21-b07219)
+![Java](https://img.shields.io/badge/Java-25-b07219)
 
 # vavi-sound-mdsdrv
 
@@ -25,6 +25,13 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 * https://github.com/superctr/ctrmml (mml to .mds)
 * https://github.com/vladikcomper/MegaPCM
 
+### File Types
+
+| name | type | status | desxription |
+|------|------|:------:|-------------|
+| MML  | MML  |   ️?   |             |
+| MSD  | SEQ  |   ✅️   |             |
+
 ## TODO
 
 * compiler
@@ -34,6 +41,8 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
   * ~~wrong timbre?~~
   * ~~no filter? dac?~~
   * as for passport.mds, unnecessary one drum notes loops 
+  * as for midnight.mds, loop is weird
+* metadata
 
 ---
 

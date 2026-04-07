@@ -7,8 +7,8 @@ import static org.junit.jupiter.api.Assertions.*;
 public class MdsDrvTest {
 
     static class MockMemory implements Memory {
-        byte[] data;
-        int offset;
+        final byte[] data;
+        final int offset;
 
         MockMemory(byte[] data) {
             this(data, 0);
