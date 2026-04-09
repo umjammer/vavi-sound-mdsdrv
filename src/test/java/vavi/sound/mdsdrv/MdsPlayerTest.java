@@ -32,8 +32,8 @@ public class MdsPlayerTest {
     @Property
     String file = "src/test/resources/data/bgm/sand_light.mds";
 
-    static boolean onIde = System.getProperty("vavi.test", "").equals("ide");
-    static long time = onIde ? 1000 : 15;
+    static final boolean onIde = System.getProperty("vavi.test", "").equals("ide");
+    static final long time = onIde ? 1000 : 15;
 
     @BeforeEach
     void setup() throws Exception {
