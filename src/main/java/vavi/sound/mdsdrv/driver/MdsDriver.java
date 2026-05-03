@@ -6,6 +6,7 @@
 
 package vavi.sound.mdsdrv.driver;
 
+import java.io.InputStream;
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayList;
@@ -13,17 +14,16 @@ import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
-import dotnet4j.io.Stream;
-import dotnet4j.util.compat.Tuple;
 import musicDriverInterface.ChipAction;
 import musicDriverInterface.ChipDatum;
-import musicDriverInterface.MetaData;
 import musicDriverInterface.IDriver;
+import musicDriverInterface.MetaData;
 import musicDriverInterface.MmlDatum;
 import vavi.sound.mdsdrv.MdsDrv;
 import vavi.sound.mdsdrv.MdsPcm;
 import vavi.sound.mdsdrv.Memory;
 import vavi.sound.mdsdrv.RiffMdsParser;
+import vavi.util.compat.Tuple;
 
 import static java.lang.System.getLogger;
 
@@ -49,7 +49,7 @@ public class MdsDriver extends MdsDrv implements IDriver {
 
     @Override
     public void init(List<ChipAction> chipsConsumer, MmlDatum[] srcBuf,
-            Function<String, Stream> appendFileReaderCallback, Object... additionalOption) {
+                     Function<String, InputStream> appendFileReaderCallback, Object... additionalOption) {
         if (chipsConsumer != null && !chipsConsumer.isEmpty()) {
             this.writeOPNA = chipsConsumer.get(0)::writeRegister;
             if (chipsConsumer.size() > 1) {
