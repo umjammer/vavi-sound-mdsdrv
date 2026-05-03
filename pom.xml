@@ -53,12 +53,12 @@
     <dependency>
       <groupId>com.github.umjammer</groupId> <!-- vavi / com.github.umjammer -->
       <artifactId>vavi-sound-mdi</artifactId>
-      <version>0.0.4</version>
+      <version>0.0.5</version>
     </dependency>
     <dependency>
       <groupId>com.github.umjammer</groupId> <!-- vavi / com.github.umjammer -->
       <artifactId>vavi-sound-mdsound</artifactId>
-      <version>0.0.14</version>
+      <version>0.0.16</version>
     </dependency>
 
     <dependency>
