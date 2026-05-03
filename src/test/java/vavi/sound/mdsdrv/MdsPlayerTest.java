@@ -15,10 +15,12 @@ import vavi.util.properties.annotation.PropsEntity;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIf;
 
 import static vavi.sound.SoundUtil.volume;
 
 
+@EnabledIf("localPropertiesExists")
 @PropsEntity(url = "file:local.properties")
 public class MdsPlayerTest {
 
@@ -110,8 +112,6 @@ public class MdsPlayerTest {
             @Override
             protected void writeIo(int port, int data) {
             }
-
-
 
             @Override
             protected Memory getPsgMemory() {
