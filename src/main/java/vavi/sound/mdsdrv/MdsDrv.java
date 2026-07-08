@@ -133,6 +133,10 @@ public class MdsDrv {
         // Debug: Note duration tracking
         public int t_debug_note_frames;
         public int t_debug_last_note;
+
+        // Number of times this track has taken its master loop (a backward 0xF5 jump).
+        // Used to expose a song loop count via getNowLoopCounter().
+        public int t_loop_count;
     }
 
     public static class WorkArea {
@@ -880,6 +884,7 @@ public class MdsDrv {
             t.t_mtab_addr = 0;
             t.t_peg_addr = 0;
             t.t_peg_mod = 0;
+            t.t_loop_count = 0;
             
             // 3. position (2 bytes) - THIS IS THE START POSITION IN SEQUENCE!
             int position = header.read16(0) & 0xffff;
@@ -1777,8 +1782,11 @@ public class MdsDrv {
                 // Result: destination = pos + 3 + offset (where pos is the F5 command position)
                 int jumpOffset = tbase.read16(pos + 1);
                 if ((jumpOffset & 0x8000) != 0) jumpOffset |= 0xFFFF0000;
+                // A backward jump is the track's master loop; count it so consumers
+                // can fade the song after a configured number of loops.
+                if (jumpOffset < 0) twork.t_loop_count++;
                 twork.t_position = pos + 3 + jumpOffset;  // Fixed: was pos + 1 + offset
-                return 0; 
+                return 0;
             case 0xF6: // FM Register Write
                 {
                     // Assembly (lines ~1479): @cmd_fmreg - Global FM register write
