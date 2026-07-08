@@ -27,9 +27,9 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 
 ### File Types
 
-| name | type | status | desxription |
+| name | type | status | description |
 |------|------|:------:|-------------|
-| MML  | MML  |   ️?   |             |
+| MML  | MML  |  n/a   |             |
 | MSD  | SEQ  |   ✅️   |             |
 
 ## TODO

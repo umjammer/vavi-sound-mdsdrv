@@ -216,7 +216,18 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
     }
 
     public int getNowLoopCounter() {
-        return 0;
+        if (workArea == null) return 0;
+        // The song has looped as many times as its least-looped still-active track.
+        // A finished track carries t_request_id == RCOUNT * 2 and is ignored; a track
+        // that keeps playing must loop via a backward 0xF5 jump, which bumps
+        // t_loop_count. So the minimum over active tracks is the song loop count.
+        int min = Integer.MAX_VALUE;
+        for (TrackData t : workArea.w_track) {
+            if (t.t_request_id < RCOUNT * 2) {
+                min = Math.min(min, t.t_loop_count);
+            }
+        }
+        return min == Integer.MAX_VALUE ? 0 : min;
     }
 
     public int setLoopCount(int loopCounter) {
