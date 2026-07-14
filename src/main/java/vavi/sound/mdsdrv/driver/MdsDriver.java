@@ -11,6 +11,7 @@ import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -165,8 +166,8 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
     } // 0x0A = Fade
 
     @Override
-    public Object getWork() {
-        return workArea;
+    public Map<String, Object> getWork() {
+        return Map.of("work", workArea);
     }
 
     @Override
@@ -179,7 +180,7 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
     }
 
     @Override
-    public MmlDatum[] getDATA() {
+    public MmlDatum[] getData() {
         return null;
     }
 
