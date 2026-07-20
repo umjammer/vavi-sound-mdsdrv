@@ -1938,14 +1938,43 @@ public class MdsDrv {
                     twork.t_position = returnPos;
                     return 0;
                 }
-                stop_track(twork);
+                stop_track(a0, twork);
                 return 1;
         }
         return 1;
     }
 
-    private static void stop_track(TrackData t) {
+    /**
+     * Assembly {@code @cmd_finish} (mdsdrv.68k lines 1163-1174): a track reaching its
+     * {@code $ff} finish command must key its channel off, not merely mark itself free.
+     * <pre>
+     *  st      w_priority(work)
+     *  bset    #cf+cf_stop,flag
+     *  move.b  #RCOUNT&lt;&lt;1,t_request_id(twork)   ;track is free
+     *  ... bclr tnum from w_tmask(work,rnum)     ;clear channel mask
+     *  ... bclr t_channel_id from w_chmask(work,rnum) ;deallocate channel
+     * </pre>
+     * cf_stop is what {@link #mds_update} turns into nf_key_off on this same pass, so
+     * without it a finished FM/PSG voice sustains forever after the song ends. The masks
+     * are indexed by the request the track belonged to, so read it before freeing it.
+     */
+    private static void stop_track(WorkArea a0, TrackData t) {
+        int rnum = t.t_request_id;
+
+        a0.w_priority = 0xff;
+        t.t_channel_flag |= (1 << cf_stop);
         t.t_request_id = RCOUNT * 2;
+
+        if (rnum < RCOUNT * 2) {
+            int real_rnum = rnum / 2;
+            for (int tnum = 0; tnum < TCOUNT; tnum++) {
+                if (a0.w_track[tnum] == t) {
+                    a0.w_tmask[real_rnum] &= ~(1 << tnum);
+                    break;
+                }
+            }
+            a0.w_chmask[real_rnum] &= ~(1 << t.t_channel_id);
+        }
     }
 
     private void do_voice_update(WorkArea a0, TrackData t) {
@@ -2235,11 +2264,13 @@ public class MdsDrv {
 
         if ((t.t_note_flag & (1 << nf_key_off)) != 0) {
             t.t_note_flag &= ~(1 << nf_key_off);
-            if ((t.t_channel_flag & (1 << cf_key_on)) != 0) {
-                t.t_channel_flag &= ~(1 << cf_key_on);
-                int keyOffSlot = ch + (part * 4);
-                write_fm_port0(0x28, keyOffSlot);
-            }
+            // Assembly (lines 2463-2469): `bclr #cf+cf_key_on,flag` merely clears the bit,
+            // it does not gate the write that follows -- $28 is written unconditionally.
+            // Guarding on cf_key_on here left a voice sounding whenever the flag had already
+            // been cleared, e.g. a track finishing on a sustaining note.
+            t.t_channel_flag &= ~(1 << cf_key_on);
+            int keyOffSlot = ch + (part * 4);
+            write_fm_port0(0x28, keyOffSlot);
         }
 
         if ((t.t_note_flag & (1 << nf_vol)) != 0) {
