@@ -92,6 +92,7 @@ logger.log(Level.DEBUG, "MdsDriver init: writeOPNA and writePSG set: " + this.wr
     public void startMusic(int musicNumber) {
         if (workArea != null) {
             logger.log(Level.DEBUG, "startMusic: " + musicNumber);
+            started = false;
             // Request 0 is BGM.
             // mds_request handles setting rf_active (bit 15) and rf_stop (bit 14).
             // Command is passed in d0 (musicNumber).
@@ -174,9 +175,30 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
     public void shotEffect() {
     }
 
+    /**
+     * Latched once the song has actually put tracks on air. Tracks are only allocated by
+     * the first {@link #mds_update} after {@link #startMusic}, so before that every track
+     * still reads as free and an unlatched "all tracks free" test would report the song
+     * finished on its very first frame.
+     */
+    private boolean started = false;
+
+    /**
+     * @return 1 while playing, 0 once every track has reached its finish command,
+     *         -1 if no song has been loaded
+     */
     @Override
     public int getStatus() {
-        return 0;
+        if (workArea == null) return -1;
+
+        for (TrackData t : workArea.w_track) {
+            if (t.t_request_id < RCOUNT * 2) {
+                started = true;
+                return 1;
+            }
+        }
+
+        return started ? 0 : 1;
     }
 
     @Override
