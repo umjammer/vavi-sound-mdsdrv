@@ -4,7 +4,7 @@
 
   <groupId>vavi</groupId>
   <artifactId>vavi-sound-mdsdrv</artifactId>
-  <version>0.4.6</version>
+  <version>0.4.7</version>
 
   <build>
     <plugins>
@@ -53,7 +53,7 @@
     <dependency>
       <groupId>com.github.umjammer</groupId> <!-- vavi / com.github.umjammer -->
       <artifactId>vavi-sound-mdsound</artifactId>
-      <version>0.0.18</version>
+      <version>0.0.21</version>
     </dependency>
     <dependency>
       <groupId>com.github.umjammer</groupId> <!-- vavi / com.github.umjammer -->
