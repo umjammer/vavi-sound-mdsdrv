@@ -232,12 +232,15 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
     public void setAllMuteFlag(boolean flg) {
     }
 
+    @Override
     public void setDriverSwitch(Object... param) {
     }
 
+    @Override
     public void writeRegister(ChipDatum reg) {
     }
 
+    @Override
     public int getNowLoopCounter() {
         if (workArea == null) return 0;
         // The song has looped as many times as its least-looped still-active track.
@@ -253,10 +256,12 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
         return min == Integer.MAX_VALUE ? 0 : min;
     }
 
+    @Override
     public int setLoopCount(int loopCounter) {
         return 0;
     }
 
+    @Override
     public MetaData getMetaData(byte[] srcBuf) {
         return new MetaData();
     }

@@ -631,6 +631,7 @@ public class MdsDrv {
     protected Memory getZ80Ram() {
         // Use persistent Z80 RAM buffer from class field
         return new Memory() {
+            @Override
             public int read8(int addr) {
                 int offset = addr - MdDef.z80_ram;
                 if (offset >= 0 && offset < z80RamBuffer.length) {
@@ -639,14 +640,17 @@ public class MdsDrv {
                 return 0;
             }
 
+            @Override
             public int read16(int addr) {
                 return (read8(addr) << 8) | read8(addr + 1);
             }
 
+            @Override
             public int read32(int addr) {
                 return (read16(addr) << 16) | read16(addr + 2);
             }
 
+            @Override
             public void write8(int addr, int data) {
                 int offset = addr - MdDef.z80_ram;
                 if (offset >= 0 && offset < z80RamBuffer.length) {
@@ -654,16 +658,19 @@ public class MdsDrv {
                 }
             }
 
+            @Override
             public void write16(int addr, int data) {
                 write8(addr, data >> 8);
                 write8(addr + 1, data & 0xFF);
             }
 
+            @Override
             public void write32(int addr, int data) {
                 write16(addr, data >> 16);
                 write16(addr + 2, data & 0xFFFF);
             }
 
+            @Override
             public Memory add(int offset) {
                 return this;
             }
