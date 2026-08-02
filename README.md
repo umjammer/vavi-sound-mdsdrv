@@ -17,7 +17,8 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 
 ## Usage
 
-* [sample](src/test/java/vavi/sound/mdsdrv/MdsPlayerTest.java)
+* [player sample](src/test/java/vavi/sound/mdsdrv/MdsPlayerTest.java)
+* [compiler sample](src/test/java/vavi/sound/ctrmml/MdsCompilerTest.java)
 
 ## References
 
@@ -29,12 +30,12 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 
 | name | type | status | description |
 |------|------|:------:|-------------|
-| MML  | MML  |  n/a   |             |
+| MML  | MML  |   ✅️   | ctrmml port |
 | MSD  | SEQ  |   ✅️   |             |
 
 ## TODO
 
-* compiler
+* ~~compiler~~
 * ~~pcm~~
 * ~~song loop is broken~~
 * ~~psm drums has problems~~
