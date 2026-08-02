@@ -20,11 +20,12 @@ Table of contents
 2. [.MDS binary file format](#mds-binary-file-format)
 	1. [.MDS file header (version 0)](#mds-file-header-version-0)
 	2. [Version chunk](#version-chunk)
-	3. [Sequence data chunk](#sequence-data-chunk)
-	4. [Data block list chunk](#data-block-list-chunk)
+	3. [Tag chunk](#tag-chunk)
+	4. [Sequence data chunk](#sequence-data-chunk)
+	5. [Data block list chunk](#data-block-list-chunk)
 		1. [Global data block subchunk](#global-data-block-subchunk)
 		2. [PCM sample header subchunk](#pcm-sample-header-subchunk)
-	5. [PCM sample data chunk](#pcm-sample-data-chunk)
+	6. [PCM sample data chunk](#pcm-sample-data-chunk)
 3. [Sound data header format](#sound-data-header-format)
 4. [Sequence header format](#sequence-header-format)
 	1. [Channel ID table](#channel-id-table)
@@ -104,6 +105,34 @@ specifying required driver options and flags.
 
 - `+9 (ub)` - `minor`
 	Sound data minor version.
+
+### Tag chunk
+This chunk holds the song metadata (title, composer and so on) that the
+MML source carries in its `#` tags. It is an extension of this project;
+MDSDRV's own tools neither write nor read it, and as the driver only
+picks out the chunks it knows, a file carrying it plays identically on
+an unaware driver. It is written only when the song has any metadata.
+
+The content is a sequence of key/value pairs, both NUL terminated: the
+tag name as written in the MML source but without its leading `#`, then
+its value. The build tags `#platform`, `#group`, `#volume` and `#option`
+are left out, as they describe how the song was built, not what it is. A
+tag holding several values is written as one pair per value, in order.
+
+The text is stored as it was in the MML source, whose encoding the chunk
+does not record; readers should take anything that is valid UTF-8 as
+UTF-8 and read the rest as Shift_JIS. This implementation's fallback is
+the encoding named by the `mdsdrv.encoding` system property, `MS932` by
+default.
+
+- `+0 (ub) [0..3]` - `chunk_id`
+	`"tag "`
+
+- `+4 (ul)` - `chunk_size`
+	Size of the chunk content (little endian)
+
+- `+8 (ub) [0..chunk_size]` - `tag_data`
+	`key` NUL `value` NUL, repeated
 
 ### Sequence data chunk
 This contains MDSDRV sequence data. This data is copied almost straight

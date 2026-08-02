@@ -47,8 +47,20 @@ public final class MdsLink {
      * @param resolver used to open the referenced PCM samples
      */
     public static Riff compile(String filename, InputStream in, FileResolver resolver) {
+        return compile(filename, in, resolver, true);
+    }
+
+    /**
+     * Compile a single MML source into the MDS RIFF container.
+     *
+     * @param filename used for diagnostics and to resolve relative sample paths
+     * @param resolver used to open the referenced PCM samples
+     * @param withTags write the song metadata as a {@code "tag "} chunk, an extension of this
+     *                 project. Pass false for output byte identical to the original ctrmml's.
+     */
+    public static Riff compile(String filename, InputStream in, FileResolver resolver, boolean withTags) {
         Song song = convert(filename, in, resolver);
-        return new MdsdrvConverter(song, resolver).getMds();
+        return new MdsdrvConverter(song, resolver).getMds(withTags);
     }
 
     /** Parse an MML source into a {@link Song} and validate it. */

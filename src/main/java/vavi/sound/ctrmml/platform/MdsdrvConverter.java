@@ -125,8 +125,18 @@ public class MdsdrvConverter {
         return data.getMessage();
     }
 
-    /** Output a MDSDRV RIFF container. */
+    /** Output a MDSDRV RIFF container, the song metadata included. */
     public Riff getMds() {
+        return getMds(true);
+    }
+
+    /**
+     * Output a MDSDRV RIFF container.
+     *
+     * @param withTags write the song metadata as a {@code "tag "} chunk, an extension of this
+     *                 project. Pass false for output byte identical to the original ctrmml's.
+     */
+    public Riff getMds(boolean withTags) {
         ByteVector ver = new ByteVector();
         ver.add(MdsdrvPlatform.SEQ_VERSION_MAJOR);
         ver.add(MdsdrvPlatform.SEQ_VERSION_MINOR);
@@ -140,6 +150,12 @@ public class MdsdrvConverter {
         Riff riff = new Riff(Riff.TYPE_RIFF, Riff.fourCc("MDS0"));
         riff.addChunk(new Riff(Riff.fourCc("ver "), ver)); // version data
         riff.addChunk(new Riff(Riff.fourCc("grp "), groupData)); // group id
+        if (withTags) {
+            ByteVector tagData = getTagData();
+            if (!tagData.isEmpty()) {
+                riff.addChunk(new Riff(Riff.fourCc("tag "), tagData)); // song metadata
+            }
+        }
         riff.addChunk(new Riff(Riff.fourCc("seq "), sequenceData));
         Riff dblk = new Riff(Riff.TYPE_LIST, Riff.fourCc("dblk"));
         for (Map.Entry<Integer, Integer> entry : usedDataMap.entrySet()) {
@@ -157,6 +173,49 @@ public class MdsdrvConverter {
         int used = rom.length - (int) data.getWaveRom().getFreeBytes();
         riff.addChunk(new Riff(Riff.fourCc("pcmd"), new ByteVector(rom, 0, used)));
         return riff;
+    }
+
+    /**
+     * The {@code #} tags that the converter and the linker consume themselves. They say how to
+     * build the song, not what it is, so they are left out of the metadata chunk.
+     */
+    private static final List<String> BUILD_TAGS = List.of("#platform", "#group", "#volume", "#option");
+
+    /**
+     * The content of the {@code "tag "} chunk: every {@code #} metadata tag of the song as a
+     * {@code key NUL value NUL} pair, the key without its {@code #}. A tag holding several
+     * values (a multi line {@code #comment}) is written as one pair per value, in order.
+     * <p>
+     * The text is the bytes of the MML source; the parser keeps them as latin-1, so writing
+     * them back that way leaves whatever the source was encoded in (usually UTF-8 or Shift_JIS)
+     * intact for the reader to work out.
+     * <p>
+     * MDSDRV itself never sees this chunk - the linker only picks out the chunks it knows - so
+     * it costs nothing in the ROM.
+     */
+    private ByteVector getTagData() {
+        ByteVector tagData = new ByteVector();
+        for (String key : song.getTagOrderList()) {
+            if (!key.startsWith("#") || BUILD_TAGS.contains(key.toLowerCase())) {
+                continue;
+            }
+            for (String value : song.getTag(key)) {
+                if (value.isEmpty()) {
+                    continue;
+                }
+                addString(tagData, key.substring(1));
+                addString(tagData, value);
+            }
+        }
+        return tagData;
+    }
+
+    /** Appends a NUL terminated string, the characters being latin-1 source bytes. */
+    private static void addString(ByteVector data, String s) {
+        for (int i = 0; i < s.length(); i++) {
+            data.add(s.charAt(i) & 0xff);
+        }
+        data.add(0);
     }
 
     /** Uses {@link MdsdrvTrackWriter} to convert a track into an event stream. */

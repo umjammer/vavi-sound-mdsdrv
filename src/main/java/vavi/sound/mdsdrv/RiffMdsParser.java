@@ -8,7 +8,14 @@ package vavi.sound.mdsdrv;
 
 import java.lang.System.Logger;
 import java.lang.System.Logger.Level;
+import java.nio.ByteBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.Charset;
+import java.nio.charset.CodingErrorAction;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 import static java.lang.System.getLogger;
@@ -38,16 +45,29 @@ public final class RiffMdsParser {
         public final boolean isRiff;
         /** Offset of seq data in original file (for debugging) */
         public final int seqOffset;
+        /**
+         * The song metadata (from the "tag " chunk), keyed by the MML tag name without its
+         * {@code #}, in the order the chunk lists them. Empty when the file carries no such
+         * chunk, which is the case for everything MDSDRV's own tools build.
+         */
+        public final Map<String, String> tags;
 
-        public ParseResult(byte[] seqData, byte[] pcmData, 
+        public ParseResult(byte[] seqData, byte[] pcmData,
                 Map<Integer, byte[]> globals, Map<Integer, PcmHeader> pcmHeaders,
                 boolean isRiff, int seqOffset) {
+            this(seqData, pcmData, globals, pcmHeaders, isRiff, seqOffset, new LinkedHashMap<>());
+        }
+
+        public ParseResult(byte[] seqData, byte[] pcmData,
+                Map<Integer, byte[]> globals, Map<Integer, PcmHeader> pcmHeaders,
+                boolean isRiff, int seqOffset, Map<String, String> tags) {
             this.seqData = seqData;
             this.pcmData = pcmData;
             this.globals = globals;
             this.pcmHeaders = pcmHeaders;
             this.isRiff = isRiff;
             this.seqOffset = seqOffset;
+            this.tags = tags;
         }
     }
 
@@ -104,6 +124,7 @@ public final class RiffMdsParser {
         byte[] pcmData = null;
         Map<Integer, byte[]> globals = new HashMap<>();
         Map<Integer, PcmHeader> pcmHeaders = new HashMap<>();
+        Map<String, String> tags = new LinkedHashMap<>();
         int seqOffset = 0;
 
         int p = 12; // Skip RIFF header
@@ -139,6 +160,12 @@ public final class RiffMdsParser {
                         System.arraycopy(data, p + 8, pcmData, 0, size);
                     }
                     break;
+                case "tag ":
+                    // Song metadata chunk
+                    if (p + 8 + size <= data.length) {
+                        parseTags(data, p + 8, size, tags);
+                    }
+                    break;
                 default:
                     // Unknown chunk, skip
                     break;
@@ -154,7 +181,72 @@ public final class RiffMdsParser {
             seqData = data;
         }
 
-        return new ParseResult(seqData, pcmData, globals, pcmHeaders, true, seqOffset);
+        return new ParseResult(seqData, pcmData, globals, pcmHeaders, true, seqOffset, tags);
+    }
+
+    /**
+     * Parse the "tag " chunk: {@code key NUL value NUL} pairs. A key that appears more than once
+     * (a tag the MML gave several values) keeps every value, joined by newlines.
+     */
+    private static void parseTags(byte[] data, int start, int length, Map<String, String> tags) {
+        int end = start + length;
+        int p = start;
+        while (p < end) {
+            int keyEnd = indexOfNul(data, p, end);
+            if (keyEnd < 0) break;
+            int valueEnd = indexOfNul(data, keyEnd + 1, end);
+            if (valueEnd < 0) break;
+            String key = decode(data, p, keyEnd);
+            String value = decode(data, keyEnd + 1, valueEnd);
+            tags.merge(key, value, (a, b) -> a + "\n" + b);
+            p = valueEnd + 1;
+        }
+    }
+
+    private static int indexOfNul(byte[] data, int from, int end) {
+        for (int i = from; i < end; i++) {
+            if (data[i] == 0) return i;
+        }
+        return -1;
+    }
+
+    /** The system property naming the encoding to read a non UTF-8 "tag " chunk with. */
+    public static final String ENCODING_KEY = "mdsdrv.encoding";
+
+    /** What {@link #ENCODING_KEY} defaults to: the other encoding MML is commonly written in. */
+    public static final String DEFAULT_ENCODING = "MS932";
+
+    /**
+     * The chunk holds the bytes of the MML source, whose encoding it does not record. Anything
+     * that is valid UTF-8 is taken as UTF-8 - plain ASCII included - and the rest is read with
+     * the encoding {@code -Dmdsdrv.encoding} names, {@value #DEFAULT_ENCODING} by default.
+     */
+    private static String decode(byte[] data, int from, int to) {
+        byte[] bytes = Arrays.copyOfRange(data, from, to);
+        try {
+            return StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(CodingErrorAction.REPORT)
+                    .decode(ByteBuffer.wrap(bytes)).toString();
+        } catch (CharacterCodingException e) {
+            return new String(bytes, fallbackEncoding());
+        }
+    }
+
+    /**
+     * The encoding {@link #ENCODING_KEY} names, read afresh each time so that setting the
+     * property takes effect whenever it is set. An unknown name falls back to the default rather
+     * than failing the read: a title is not worth losing a song over.
+     */
+    private static Charset fallbackEncoding() {
+        String name = System.getProperty(ENCODING_KEY, DEFAULT_ENCODING);
+        try {
+            return Charset.forName(name);
+        } catch (IllegalArgumentException e) { // illegal or unsupported name
+            logger.log(Level.WARNING, ENCODING_KEY + ": no such charset, reading as "
+                    + DEFAULT_ENCODING + ": " + name);
+            return Charset.forName(DEFAULT_ENCODING);
+        }
     }
 
     /**

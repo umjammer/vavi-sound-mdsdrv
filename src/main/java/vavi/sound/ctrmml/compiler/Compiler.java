@@ -62,6 +62,8 @@ public class Compiler implements ICompiler {
     private String filename = "mml";
     private Charset charset = DEFAULT_CHARSET;
     private Function<String, InputStream> appendFileReaderCallback;
+    /** Write the song metadata into the {@code .mds}; off gives the original ctrmml's output. */
+    private boolean writeTags = true;
     private CompilerInfo compilerInfo = new CompilerInfo();
     private Song song;
     private byte[] seqData;
@@ -84,6 +86,8 @@ public class Compiler implements ICompiler {
      * <li>a {@link Function}{@code <String, InputStream>} sets the file reader callback</li>
      * <li>{@code "FileName=<name>"} sets the name used for diagnostics and relative sample paths</li>
      * <li>{@code "Charset=<name>"} sets the charset used to decode the metadata tags</li>
+     * <li>{@code "Tags=false"} leaves the metadata out of the {@code .mds}, for output byte
+     * identical to the original ctrmml's</li>
      * </ul>
      */
     @Override
@@ -101,6 +105,8 @@ public class Compiler implements ICompiler {
                     filename = s.substring("FileName=".length());
                 } else if (s.startsWith("Charset=")) {
                     charset = Charset.forName(s.substring("Charset=".length()));
+                } else if (s.startsWith("Tags=")) {
+                    writeTags = Boolean.parseBoolean(s.substring("Tags=".length()));
                 }
             }
         }
@@ -119,7 +125,7 @@ public class Compiler implements ICompiler {
             song = MdsLink.convert(filename, new ByteArrayInputStream(source), resolver);
             reportTrackLengths();
 
-            Riff mds = new MdsdrvConverter(song, resolver).getMds();
+            Riff mds = new MdsdrvConverter(song, resolver).getMds(writeTags);
 
             MdsdrvLinker linker = new MdsdrvLinker();
             linker.addSong(mds, baseName(filename));

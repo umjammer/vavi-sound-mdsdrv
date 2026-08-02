@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import vavi.sound.ctrmml.compiler.Compiler;
+import vavi.sound.mdsdrv.driver.MdsDriver;
 import vavi.sound.mdsdrv.RiffMdsParser;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
@@ -52,17 +53,56 @@ class MdsCompilerTest {
     };
 
     static Riff compile(String name) throws IOException {
+        return compile(name, true);
+    }
+
+    static Riff compile(String name, boolean withTags) throws IOException {
         try (InputStream in = Files.newInputStream(DATA.resolve(name + ".mml"))) {
-            return MdsLink.compile(name + ".mml", in, RESOLVER);
+            return MdsLink.compile(name + ".mml", in, RESOLVER, withTags);
         }
     }
 
     @Test
     @DisplayName("jazzy_nyc_99.mml compiles to exactly the bundled jazzy_nyc_99.mds")
     void testCompileMatchesReferenceMds() throws Exception {
+        // the reference was built by the original ctrmml, which has no metadata chunk to write
         byte[] expected = Files.readAllBytes(DATA.resolve("bgm/jazzy_nyc_99.mds"));
-        byte[] actual = compile("bgm/jazzy_nyc_99").toBytes().toByteArray();
+        byte[] actual = compile("bgm/jazzy_nyc_99", false).toBytes().toByteArray();
         assertArrayEquals(expected, actual);
+    }
+
+    @Test
+    @DisplayName("The metadata chunk carries the MML tags through to the driver")
+    void testCompileWritesTags() throws Exception {
+        byte[] mds = compile("bgm/jazzy_nyc_99").toBytes().toByteArray();
+
+        RiffMdsParser.ParseResult parsed = RiffMdsParser.parse(mds);
+        assertEquals("JAZZY NYC'91", parsed.tags.get("title"));
+        assertEquals("Street Fighter III: 3rd Strike", parsed.tags.get("game"));
+        assertEquals("ctr", parsed.tags.get("author"));
+        assertEquals("2019-03-23", parsed.tags.get("date"));
+        // #platform is a build tag, and the parser never saw it as a tag in the first place
+        assertFalse(parsed.tags.containsKey("platform"));
+
+        // the sequence is the same as without the chunk, so the song still plays the same
+        assertArrayEquals(RiffMdsParser.parse(compile("bgm/jazzy_nyc_99", false)
+                .toBytes().toByteArray()).seqData, parsed.seqData);
+
+        MetaData metaData = new MdsDriver().getMetaData(mds);
+        assertEquals("JAZZY NYC'91", metaData.getFirst(MetaData.Tag.Title));
+        assertEquals("JAZZY NYC'91", metaData.getFirst(MetaData.Tag.TitleJ));
+        assertEquals("Street Fighter III: 3rd Strike", metaData.getFirst(MetaData.Tag.GameTitle));
+        assertEquals("ctr", metaData.getFirst(MetaData.Tag.Artist));
+        assertEquals("2019-03-23", metaData.getFirst(MetaData.Tag.ReleaseDate));
+    }
+
+    @Test
+    @DisplayName("A .mds without the metadata chunk yields empty metadata")
+    void testReferenceMdsHasNoTags() throws Exception {
+        byte[] mds = Files.readAllBytes(DATA.resolve("bgm/jazzy_nyc_99.mds"));
+        assertTrue(RiffMdsParser.parse(mds).tags.isEmpty());
+        assertTrue(new MdsDriver().getMetaData(mds)
+                .getFirst(MetaData.Tag.Title).isEmpty());
     }
 
     static Stream<String> soundEffects() {
@@ -149,7 +189,24 @@ class MdsCompilerTest {
         for (int i = 0; i < data.length; i++) {
             actual[i] = (byte) data[i].dat;
         }
-        assertArrayEquals(Files.readAllBytes(DATA.resolve("bgm/jazzy_nyc_99.mds")), actual);
+        // same container as the reference, plus the metadata chunk the original had nowhere to put
+        RiffMdsParser.ParseResult reference = RiffMdsParser.parse(
+                Files.readAllBytes(DATA.resolve("bgm/jazzy_nyc_99.mds")));
+        RiffMdsParser.ParseResult parsed = RiffMdsParser.parse(actual);
+        assertArrayEquals(reference.seqData, parsed.seqData);
+        assertEquals(reference.globals.size(), parsed.globals.size());
+        assertEquals("JAZZY NYC'91", parsed.tags.get("title"));
+
+        // and byte identical to it once the compiler is told not to write that chunk
+        compiler.setCompileSwitch("Tags=false");
+        try (InputStream in = Files.newInputStream(DATA.resolve("bgm/jazzy_nyc_99.mml"))) {
+            data = compiler.compile(in, RESOLVER::open);
+        }
+        byte[] untagged = new byte[data.length];
+        for (int i = 0; i < data.length; i++) {
+            untagged[i] = (byte) data[i].dat;
+        }
+        assertArrayEquals(Files.readAllBytes(DATA.resolve("bgm/jazzy_nyc_99.mds")), untagged);
 
         // the linked banks are available as well
         assertNotNull(compiler.getSeqData());
