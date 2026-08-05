@@ -17,24 +17,26 @@ this is a fork of [MDSDRV](https://github.com/superctr/MDSDRV)
 
 ## Usage
 
-* [sample](src/test/java/vavi/sound/mdsdrv/MdsPlayerTest.java)
+* [player sample](src/test/java/vavi/sound/mdsdrv/MdsPlayerTest.java)
+* [compiler sample](src/test/java/vavi/sound/ctrmml/MdsCompilerTest.java)
 
 ## References
 
 * https://github.com/uniskie/msx_music_data/tree/master/Mus-MGSDRV (.mds)
 * https://github.com/superctr/ctrmml (mml to .mds)
 * https://github.com/vladikcomper/MegaPCM
+* https://github.com/junt74/webasm-mkvdrv
 
 ### File Types
 
 | name | type | status | description |
 |------|------|:------:|-------------|
-| MML  | MML  |  n/a   |             |
+| MML  | MML  |   ✅️   | ctrmml port |
 | MSD  | SEQ  |   ✅️   |             |
 
 ## TODO
 
-* compiler
+* ~~compiler~~
 * ~~pcm~~
 * ~~song loop is broken~~
 * ~~psm drums has problems~~

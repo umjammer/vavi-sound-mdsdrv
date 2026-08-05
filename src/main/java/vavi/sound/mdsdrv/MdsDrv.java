@@ -3318,7 +3318,7 @@ public class MdsDrv {
     // ASM: dcb.b 2,$8f; ... various runs.
     // I will use a simplified table or the exact one if I expand it.
     // For now, let's pre-expand the table as seen in ASM.
-    private static final byte[] mds_psg_vol_table_raw = new byte[] {
+    private static final byte[] mds_psg_vol_table_raw = {
             (byte) 0x8f, (byte) 0x8f, // 2
             (byte) 0x8f, (byte) 0x8f, (byte) 0x8f, // 3
             (byte) 0x8e, (byte) 0x8e, (byte) 0x8e, // 3

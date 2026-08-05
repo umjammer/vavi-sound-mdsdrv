@@ -19,6 +19,7 @@ import musicDriverInterface.ChipAction;
 import musicDriverInterface.ChipDatum;
 import musicDriverInterface.IDriver;
 import musicDriverInterface.MetaData;
+import musicDriverInterface.MetaData.Tag;
 import musicDriverInterface.MmlDatum;
 import vavi.sound.mdsdrv.MdsDrv;
 import vavi.sound.mdsdrv.MdsPcm;
@@ -261,9 +262,37 @@ logger.log(Level.DEBUG, "startRendering: freq=%d samplesPerFrame=%.2f".formatted
         return 0;
     }
 
+    /**
+     * The MML tags of the {@code "tag "} chunk and the {@link MetaData} tags they fill in, the
+     * same mapping {@code vavi.sound.ctrmml.compiler.Compiler} reads out of an MML source. The
+     * {@code J} variants get the same text: MML has one field per name, not one per script.
+     */
+    private static final Map<String, Tag[]> META_TAGS = Map.of(
+            "title", new Tag[] {Tag.Title, Tag.TitleJ},
+            "composer", new Tag[] {Tag.Composer, Tag.ComposerJ},
+            "author", new Tag[] {Tag.Artist, Tag.ArtistJ},
+            "programmer", new Tag[] {Tag.Arranger, Tag.ArrangerJ},
+            "game", new Tag[] {Tag.GameTitle, Tag.GameTitleJ},
+            "system", new Tag[] {Tag.GameSystem, Tag.GameSystemJ},
+            "date", new Tag[] {Tag.ReleaseDate},
+            "comment", new Tag[] {Tag.Memo});
+
+    /**
+     * The song metadata, which a {@code .MDS} only carries if it was built by this project's
+     * compiler - MDSDRV's own tools drop the MML tags at link time. The result is empty for
+     * anything else, there being nowhere else in the format for a title to hide.
+     */
     @Override
     public MetaData getMetaData(byte[] srcBuf) {
-        return new MetaData();
+        MetaData metaData = new MetaData();
+        for (Map.Entry<String, String> e : RiffMdsParser.parse(srcBuf).tags.entrySet()) {
+            Tag[] tags = META_TAGS.get(e.getKey().toLowerCase());
+            if (tags == null) continue;
+            for (Tag tag : tags) {
+                metaData.set(tag, e.getValue());
+            }
+        }
+        return metaData;
     }
 
     @Override
