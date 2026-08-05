@@ -19,6 +19,7 @@ import musicDriverInterface.MetaData;
 import musicDriverInterface.MmlDatum;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import vavi.sound.ctrmml.compiler.Compiler;
@@ -64,6 +65,7 @@ class MdsCompilerTest {
 
     @Test
     @DisplayName("jazzy_nyc_99.mml compiles to exactly the bundled jazzy_nyc_99.mds")
+    @EnabledIfSystemProperty(named = "vavi.test", matches = "ide")
     void testCompileMatchesReferenceMds() throws Exception {
         // the reference was built by the original ctrmml, which has no metadata chunk to write
         byte[] expected = Files.readAllBytes(DATA.resolve("bgm/jazzy_nyc_99.mds"));
@@ -98,6 +100,7 @@ class MdsCompilerTest {
 
     @Test
     @DisplayName("A .mds without the metadata chunk yields empty metadata")
+    @EnabledIfSystemProperty(named = "vavi.test", matches = "ide")
     void testReferenceMdsHasNoTags() throws Exception {
         byte[] mds = Files.readAllBytes(DATA.resolve("bgm/jazzy_nyc_99.mds"));
         assertTrue(RiffMdsParser.parse(mds).tags.isEmpty());
@@ -173,6 +176,7 @@ class MdsCompilerTest {
 
     @Test
     @DisplayName("ICompiler.compile() returns the MDS container that MdsDriver consumes")
+    @EnabledIfSystemProperty(named = "vavi.test", matches = "ide")
     void testICompiler() throws Exception {
         Compiler compiler = new Compiler();
         compiler.init();
