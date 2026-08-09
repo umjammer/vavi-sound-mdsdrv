@@ -14,7 +14,7 @@ package vavi.sound.ctrmml.platform;
  * @version 0.00 2026-08-02 nsano initial version <br>
  * @see <a href="https://github.com/superctr/ctrmml">ctrmml</a> src/platform/mdsdrv.h
  */
-public class MdsdrvEvent {
+class MdsdrvEvent {
 
     /** carry event for macro track */
     public static final int CARRY = 0x7e;

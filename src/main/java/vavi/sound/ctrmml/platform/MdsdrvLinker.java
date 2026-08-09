@@ -312,7 +312,7 @@ public class MdsdrvLinker {
         return str;
     }
 
-    /** Add unique data to the data bank (same as {@link MdsdrvData#addUniqueData}). */
+    /** Add unique data to the data bank (same as {@code MdsdrvData#addUniqueData}). */
     private int addUniqueData(ByteVector data) {
         for (int i = 0; i < dataBank.size(); i++) {
             if (data.equals(dataBank.get(i))) {

@@ -32,24 +32,24 @@ public class WaveBank {
     /** {@code sscanf("offset = %u")} */
     private static final Pattern OFFSET = Pattern.compile("^offset\\s*=\\s*([+-]?\\d+)");
 
-    protected static final int NO_FIT = -1;
+    private static final int NO_FIT = -1;
 
     /** Aggregate sample header class. */
     public static class Sample {
         public int position;
         public int start;
         public int size;
-        public int loopStart;
-        public int loopEnd;
+        int loopStart;
+        int loopEnd;
         public int rate;
-        public int transpose;
-        public int flags;
+        int transpose;
+        int flags;
 
         public Sample() {
         }
 
-        public Sample(int position, int start, int size, int loopStart, int loopEnd, int rate,
-                      int transpose, int flags) {
+        Sample(int position, int start, int size, int loopStart, int loopEnd, int rate,
+               int transpose, int flags) {
             this.position = position;
             this.start = start;
             this.size = size;
@@ -91,18 +91,18 @@ public class WaveBank {
         }
 
         /** The original compares samples by their serialized form. */
-        public boolean sameAs(Sample other) {
+        boolean sameAs(Sample other) {
             return toBytes().equals(other.toBytes());
         }
 
-        public Sample copy() {
+        Sample copy() {
             return new Sample(position, start, size, loopStart, loopEnd, rate, transpose, flags);
         }
     }
 
-    protected static class Gap {
+    static class Gap {
         long start;
-        long end;
+        final long end;
 
         Gap(long start, long end) {
             this.start = start;
@@ -110,16 +110,16 @@ public class WaveBank {
         }
     }
 
-    protected final long maxSize;
-    protected long currentSize;
-    protected long bankSize;
+    private final long maxSize;
+    private long currentSize;
+    private final long bankSize;
 
-    protected List<String> includePaths = new ArrayList<>(List.of(""));
-    protected final byte[] romData;
-    protected final List<Gap> gaps = new ArrayList<>();
-    protected final List<Sample> samples = new ArrayList<>();
-    protected String errorMessage = "";
-    protected FileResolver resolver = FileResolver.FILE_SYSTEM;
+    private List<String> includePaths = new ArrayList<>(List.of(""));
+    private final byte[] romData;
+    private final List<Gap> gaps = new ArrayList<>();
+    private final List<Sample> samples = new ArrayList<>();
+    private String errorMessage = "";
+    private FileResolver resolver = FileResolver.FILE_SYSTEM;
 
     public WaveBank(long maxSize, long bankSize) {
         this.maxSize = maxSize;
@@ -293,7 +293,7 @@ public class WaveBank {
      *
      * @param gapStart out parameter, set with the aligned start position of the gap
      */
-    protected int findGap(Sample header, long[] gapStart) {
+    private int findGap(Sample header, long[] gapStart) {
         int bestGap = NO_FIT;
         if (!gaps.isEmpty()) {
             // Look for the smallest gap that fits our sample
@@ -312,7 +312,7 @@ public class WaveBank {
     }
 
     /** Encode the sample, converting it from 16-bit data to 8-bit. */
-    protected ByteVector encodeSample(String encodingType, List<Short> input) {
+    private ByteVector encodeSample(String encodingType, List<Short> input) {
         // default encoder, simply convert 16-bit to 8-bit unsigned
         ByteVector output = new ByteVector();
         for (short i : input) {
@@ -328,7 +328,7 @@ public class WaveBank {
      * start address of the sample. If the sample cannot fit within the boundaries, return
      * {@link #NO_FIT}.
      */
-    protected long fitSample(Sample header, long start, long end) {
+    private long fitSample(Sample header, long start, long end) {
         long sampleEnd = start + header.size;
         long startBank = start / bankSize;
         long endBank = sampleEnd / bankSize;
@@ -353,7 +353,7 @@ public class WaveBank {
      *
      * @return the index to the duplicate wave entry, or -1
      */
-    protected int findDuplicate(Sample header, ByteVector sample) {
+    private int findDuplicate(Sample header, ByteVector sample) {
         int id = 0;
         for (Sample i : samples) {
             // The reason for the loop start check is that some sound chips (like C352)

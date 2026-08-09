@@ -34,14 +34,14 @@ public class Conf {
     /** Characters that break a token. */
     private static final String BREAK_SEQUENCES = " \t\r\n\":,;{}";
 
-    public final List<Conf> subkeys = new ArrayList<>();
-    public String key;
+    private final List<Conf> subkeys = new ArrayList<>();
+    private final String key;
 
     public Conf() {
         this("");
     }
 
-    public Conf(String key) {
+    private Conf(String key) {
         this.key = key;
     }
 

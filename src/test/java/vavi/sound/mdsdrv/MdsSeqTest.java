@@ -18,7 +18,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 /**
  * Transcribed from mdsseq.68k
  */
-public class MdsSeqTest {
+class MdsSeqTest {
 
     //
     // mdsseq.inc constants

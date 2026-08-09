@@ -18,7 +18,7 @@ public class Riff {
 
     public static final int TYPE_RIFF = 0x52494646;
     public static final int TYPE_LIST = 0x4C495354;
-    public static final int ID_NONE = 0x20202020;
+    private static final int ID_NONE = 0x20202020;
 
     /** Converts a 4 character string to its big endian literal, the {@code FOURCC} macro. */
     public static int fourCc(String code) {
@@ -27,7 +27,7 @@ public class Riff {
     }
 
     private int position;
-    private int type;
+    private final int type;
     private final ByteVector data = new ByteVector();
 
     /** Create new RIFF. */

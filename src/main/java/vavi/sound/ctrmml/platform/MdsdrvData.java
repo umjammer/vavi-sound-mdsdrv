@@ -97,17 +97,17 @@ public class MdsdrvData {
     /** Data bank, holds all instrument and envelope data. */
     final List<ByteVector> dataBank = new ArrayList<>();
     /** Waverom bank, holds PCM samples. */
-    final WaveBank waveRom = new WaveBank(0x20_0000);
+    private final WaveBank waveRom = new WaveBank(0x20_0000);
     /** Maps the current song instruments to data bank entries. */
-    final Map<Integer, Integer> envelopeMap = new TreeMap<>();
+    private final Map<Integer, Integer> envelopeMap = new TreeMap<>();
     /** Maps the PCM instruments to a wave rom header. */
-    final Map<Integer, Integer> waveMap = new TreeMap<>();
+    private final Map<Integer, Integer> waveMap = new TreeMap<>();
     /** Maps the current song instrument to transpose settings (for FM 2op only). */
-    final Map<Integer, Integer> insTranspose = new TreeMap<>();
+    private final Map<Integer, Integer> insTranspose = new TreeMap<>();
     /** Specify the instrument types of the defined song instruments. */
     final Map<Integer, InstrumentType> insType = new TreeMap<>();
     /** Maps the current song pitch envelopes to data bank entries. */
-    final Map<Integer, Integer> pitchMap = new TreeMap<>();
+    private final Map<Integer, Integer> pitchMap = new TreeMap<>();
     /** Specify the instrument types of the defined pitch envelopes. */
     final Set<Integer> pitchExtend = new TreeSet<>();
     /** Diagnostic message. */
@@ -178,7 +178,7 @@ public class MdsdrvData {
     }
 
     /** Add an instrument to the data bank. */
-    public void addInstrument(int id, List<String> tag) {
+    private void addInstrument(int id, List<String> tag) {
         String type = tag.getFirst();
         List<String> rest = tag.subList(1, tag.size());
         if (CType.iequal("fm", type)) {
@@ -423,7 +423,7 @@ public class MdsdrvData {
      *
      * @throws IllegalArgumentException if the envelope requires the extended format
      */
-    public void addPitchEnvelope(int id, List<String> tag) {
+    private void addPitchEnvelope(int id, List<String> tag) {
         ByteVector envData = new ByteVector();
         int loopPos = -1;
         if (tag.isEmpty()) {
@@ -454,7 +454,7 @@ public class MdsdrvData {
     }
 
     /** Read an extended pitch envelope. */
-    public void addExtendedPitchEnvelope(int id, List<String> tag) {
+    private void addExtendedPitchEnvelope(int id, List<String> tag) {
         ByteVector envData = new ByteVector();
         int loopPos = -1;
         if (tag.isEmpty()) {
@@ -512,7 +512,7 @@ public class MdsdrvData {
             int envLen = Math.min(length, 255);
             int envInitial = (short) (int) (counter * 256);
             int envDelta = (short) (int) (delta * 256);
-            envInitial = (short) (envInitial > 0x7eff ? 0x7eff : envInitial);
+            envInitial = (short) (Math.min(envInitial, 0x7eff));
             if (extend) {
                 envData.add(envInitial >> 8);
                 envData.add(envInitial & 0xff);
@@ -522,7 +522,7 @@ public class MdsdrvData {
                 envData.add((envData.size() + 1) / 6);
             } else {
                 if (!useExtendedPitch) {
-                    envDelta = Math.max(-128, Math.min(127, envDelta));
+                    envDelta = Math.clamp(envDelta, -128, 127);
                 } else if (envDelta > 127 || envDelta < -128) {
                     throw new IllegalArgumentException("addPitchNode");
                 }
@@ -574,7 +574,7 @@ public class MdsdrvData {
      * <p>
      * In case of a duplicate, return the index of the previously added data.
      */
-    int addUniqueData(ByteVector data) {
+    private int addUniqueData(ByteVector data) {
         for (int i = 0; i < dataBank.size(); i++) {
             if (data.equals(dataBank.get(i))) {
                 return i;

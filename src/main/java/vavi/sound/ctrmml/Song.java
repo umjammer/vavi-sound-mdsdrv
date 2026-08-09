@@ -75,7 +75,7 @@ public class Song {
      * <p>
      * If a new tag is created, an entry is added to the {@code tag_order} tag.
      */
-    public List<String> getOrMakeTag(String key) {
+    private List<String> getOrMakeTag(String key) {
         List<String> tag = tagMap.get(key);
         if (tag != null) {
             return tag;
@@ -94,7 +94,7 @@ public class Song {
      *
      * @throws NoSuchElementException if not found
      */
-    public String getTagFront(String key) {
+    String getTagFront(String key) {
         List<String> tag = getTag(key);
         if (tag.isEmpty()) {
             throw new NoSuchElementException(key);
@@ -118,7 +118,7 @@ public class Song {
      * @param key   Tag key. If the key is not found, a new tag is created.
      * @param value String that is added to the tag.
      */
-    public void addTag(String key, String value) {
+    void addTag(String key, String value) {
         getOrMakeTag(key).add(trimTrailingSpaces(value));
     }
 
@@ -131,7 +131,7 @@ public class Song {
      * @param key   Tag key. If the key is not found, a new tag is created.
      * @param value String that is written to the tag.
      */
-    public void setTag(String key, String value) {
+    void setTag(String key, String value) {
         List<String> tag = getOrMakeTag(key);
         tag.clear();
         tag.add(trimTrailingSpaces(value));
@@ -148,7 +148,7 @@ public class Song {
      * @param value List of values to add. The list can be separated by commas OR spaces, but
      *              comma always forces a value to be added.
      */
-    public void addTagList(String key, String value) {
+    void addTagList(String key, String value) {
         List<String> tag = getOrMakeTag(key);
         char[] s = value.toCharArray();
         int pos = 0;
@@ -244,7 +244,7 @@ public class Song {
      * @param value Command arguments.
      * @return The tag's command id.
      */
-    public int registerPlatformCommand(int param, String value) {
+    int registerPlatformCommand(int param, String value) {
         if (param == -1) {
             param = platformCommandIndex++;
         }
@@ -280,7 +280,7 @@ public class Song {
     }
 
     /** Get the track with the specified id, creating it if it is not found. */
-    public Track makeTrack(int id) {
+    Track makeTrack(int id) {
         return trackMap.computeIfAbsent(id & 0xffff, k -> new Track(ppqn));
     }
 
@@ -304,7 +304,7 @@ public class Song {
      *
      * @return false, matching the original which never reports failure
      */
-    public boolean setPlatform(String key) {
+    boolean setPlatform(String key) {
         if (CType.iequal(key, "megadrive")) {
             platform = new MdsdrvPlatform(0);
         } else if (CType.iequal(key, "mdsdrv")) {

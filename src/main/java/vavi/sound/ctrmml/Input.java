@@ -35,7 +35,7 @@ public abstract class Input {
     private String filename = "";
     private FileResolver resolver = FileResolver.FILE_SYSTEM;
 
-    protected Input(Song song) {
+    Input(Song song) {
         this.song = song;
     }
 
@@ -92,12 +92,12 @@ public abstract class Input {
     }
 
     /** Get the target Song object. */
-    protected Song getSong() {
+    Song getSong() {
         return song;
     }
 
     /** Get current filename. */
-    protected String getFilename() {
+    String getFilename() {
         return filename;
     }
 
@@ -107,17 +107,17 @@ public abstract class Input {
      * This can be overridden by derived classes to support column/line numbers where this is
      * relevant.
      */
-    protected InputRef getReference() {
+    InputRef getReference() {
         return new InputRef(filename);
     }
 
     /** Throw an {@link InputError}. */
-    protected void parseError(String msg) {
+    void parseError(String msg) {
         throw new InputError(getReference(), msg);
     }
 
     /** Raise a parse warning. */
-    protected void parseWarning(String msg) {
+    void parseWarning(String msg) {
         logger.log(Level.WARNING, "%s: %s%n%s".formatted(getReference(), msg, getReference().getLineContents()));
     }
 

@@ -12,6 +12,7 @@ import java.util.NoSuchElementException;
 import vavi.sound.ctrmml.BasicPlayer;
 import vavi.sound.ctrmml.CType;
 import vavi.sound.ctrmml.Cursor;
+import vavi.sound.ctrmml.Event;
 
 import static vavi.sound.ctrmml.platform.MdsdrvData.getRegister;
 
@@ -51,12 +52,12 @@ class MdsdrvTrackWriter extends BasicPlayer {
     protected void eventHook() {
         int param;
         if (isInsideLoop() || isInsideJump()) {
-            if (event.type == vavi.sound.ctrmml.Event.Type.INS) {
+            if (event.type == Event.Type.INS) {
                 checkInstrument(event.param);
             }
             return;
         }
-        if (event.type != vavi.sound.ctrmml.Event.Type.REST && restTime != 0) {
+        if (event.type != Event.Type.REST && restTime != 0) {
             convertedEvents.add(new MdsdrvEvent(MdsdrvEvent.REST, restTime));
             restTime = 0;
         }

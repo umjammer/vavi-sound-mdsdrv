@@ -20,7 +20,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** scratch: does getStatus() go 1 -> 0 exactly once, at the real end of the song? */
 @Disabled("for ai iteration")
-public class ScratchStatusTest {
+class ScratchStatusTest {
 
     static class Act implements ChipAction {
         @Override public String getChipName() { return ""; }
@@ -30,7 +30,7 @@ public class ScratchStatusTest {
     }
 
     @Test
-    public void test() throws Exception {
+    void test() throws Exception {
         Path p = Path.of("src/test/resources/data/bgm/junkers_high.mds");
         byte[] data = Files.readAllBytes(p);
 

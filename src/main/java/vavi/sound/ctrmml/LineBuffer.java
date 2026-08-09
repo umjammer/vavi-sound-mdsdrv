@@ -16,11 +16,11 @@ package vavi.sound.ctrmml;
  * @version 0.00 2026-08-02 nsano initial version <br>
  * @see <a href="https://github.com/superctr/ctrmml">ctrmml</a> src/input.cpp
  */
-public class LineBuffer {
+class LineBuffer {
 
     /** current line used by get/unget functions, etc. */
-    protected StringBuilder buffer;
-    protected int column;
+    StringBuilder buffer;
+    int column;
 
     public LineBuffer(String line, int column) {
         this.buffer = new StringBuilder(line);
@@ -127,14 +127,14 @@ public class LineBuffer {
     }
 
     /** Set the contents of the buffer and reset the position. */
-    protected void setBuffer(String line, int newColumn) {
+    void setBuffer(String line, int newColumn) {
         buffer = new StringBuilder(line);
         column = newColumn;
     }
 
     /** {@code std::invalid_argument} */
     public static class InvalidArgumentException extends RuntimeException {
-        public InvalidArgumentException(String message) {
+        InvalidArgumentException(String message) {
             super(message);
         }
     }

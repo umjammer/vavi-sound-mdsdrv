@@ -40,11 +40,11 @@ public final class RiffMdsParser {
         /** Global data blocks indexed by ID (from "glob" subchunks) */
         public final Map<Integer, byte[]> globals;
         /** PCM headers indexed by ID (from "pcmh" subchunks) */
-        public final Map<Integer, PcmHeader> pcmHeaders;
+        final Map<Integer, PcmHeader> pcmHeaders;
         /** Whether the input was in RIFF format */
         public final boolean isRiff;
         /** Offset of seq data in original file (for debugging) */
-        public final int seqOffset;
+        final int seqOffset;
         /**
          * The song metadata (from the "tag " chunk), keyed by the MML tag name without its
          * {@code #}, in the order the chunk lists them. Empty when the file carries no such
@@ -52,15 +52,15 @@ public final class RiffMdsParser {
          */
         public final Map<String, String> tags;
 
-        public ParseResult(byte[] seqData, byte[] pcmData,
-                Map<Integer, byte[]> globals, Map<Integer, PcmHeader> pcmHeaders,
-                boolean isRiff, int seqOffset) {
+        ParseResult(byte[] seqData, byte[] pcmData,
+                    Map<Integer, byte[]> globals, Map<Integer, PcmHeader> pcmHeaders,
+                    boolean isRiff, int seqOffset) {
             this(seqData, pcmData, globals, pcmHeaders, isRiff, seqOffset, new LinkedHashMap<>());
         }
 
-        public ParseResult(byte[] seqData, byte[] pcmData,
-                Map<Integer, byte[]> globals, Map<Integer, PcmHeader> pcmHeaders,
-                boolean isRiff, int seqOffset, Map<String, String> tags) {
+        ParseResult(byte[] seqData, byte[] pcmData,
+                    Map<Integer, byte[]> globals, Map<Integer, PcmHeader> pcmHeaders,
+                    boolean isRiff, int seqOffset, Map<String, String> tags) {
             this.seqData = seqData;
             this.pcmData = pcmData;
             this.globals = globals;
@@ -72,19 +72,19 @@ public final class RiffMdsParser {
     }
 
     /** PCM header data from "pcmh" subchunk */
-    public static class PcmHeader {
-        public final int id;
-        public final int position;
-        public final int start;
-        public final int size;
-        public final int loopStart;
-        public final int loopEnd;
-        public final int rate;
-        public final int transpose;
-        public final int flags;
+    static class PcmHeader {
+        final int id;
+        final int position;
+        final int start;
+        final int size;
+        final int loopStart;
+        final int loopEnd;
+        final int rate;
+        final int transpose;
+        final int flags;
 
-        public PcmHeader(int id, int position, int start, int size,
-                int loopStart, int loopEnd, int rate, int transpose, int flags) {
+        PcmHeader(int id, int position, int start, int size,
+                  int loopStart, int loopEnd, int rate, int transpose, int flags) {
             this.id = id;
             this.position = position;
             this.start = start;
@@ -104,7 +104,7 @@ public final class RiffMdsParser {
     /**
      * Check if data is in RIFF MDS format.
      */
-    public static boolean isRiffMds(byte[] data) {
+    private static boolean isRiffMds(byte[] data) {
         return data.length >= 12 &&
                 data[0] == 'R' && data[1] == 'I' && data[2] == 'F' && data[3] == 'F' &&
                 data[8] == 'M' && data[9] == 'D' && data[10] == 'S' && data[11] == '0';
@@ -211,10 +211,10 @@ public final class RiffMdsParser {
     }
 
     /** The system property naming the encoding to read a non UTF-8 "tag " chunk with. */
-    public static final String ENCODING_KEY = "mdsdrv.encoding";
+    static final String ENCODING_KEY = "mdsdrv.encoding";
 
     /** What {@link #ENCODING_KEY} defaults to: the other encoding MML is commonly written in. */
-    public static final String DEFAULT_ENCODING = "MS932";
+    private static final String DEFAULT_ENCODING = "MS932";
 
     /**
      * The chunk holds the bytes of the MML source, whose encoding it does not record. Anything

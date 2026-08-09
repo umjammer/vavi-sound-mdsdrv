@@ -35,13 +35,13 @@ public abstract class BasicPlayer {
     /** Current event. */
     protected Event event;
     /** Current event in the track, null at the end of the track. */
-    protected Event trackEvent;
+    private Event trackEvent;
     /** Current reference. */
-    protected InputRef reference;
+    InputRef reference;
     /** Playing time. */
-    protected long playTime;
+    long playTime;
     /** Playing time at loop point, -1 if the loop point has not been reached. */
-    protected long loopPlayTime = -1;
+    long loopPlayTime = -1;
     /** Key-on time from current event. */
     protected int onTime;
     /** Key-off time from current event. */
@@ -58,7 +58,7 @@ public abstract class BasicPlayer {
     private int loopResetCount;
     private final Deque<PlayerStack> stack = new ArrayDeque<>();
     private final int[] stackDepth = new int[PlayerStack.Type.MAX_STACK_TYPE];
-    private final int maxStackDepth = 10;
+    private static final int maxStackDepth = 10;
     /** Number of loops in the stack where the loop count is 0. */
     private int loopBeginDepth;
 
@@ -199,7 +199,7 @@ public abstract class BasicPlayer {
      * Check if the playback position is inside a loop. The first iteration of each loop is not
      * counted.
      */
-    public boolean isInsideLoop() {
+    protected boolean isInsideLoop() {
         return stackDepth[PlayerStack.Type.LOOP.ordinal()] != 0
                 && stackDepth[PlayerStack.Type.LOOP.ordinal()] != loopBeginDepth;
     }
@@ -208,7 +208,7 @@ public abstract class BasicPlayer {
      * Check if the playback position is inside a jump (subroutine). This also includes drum
      * mode subroutines.
      */
-    public boolean isInsideJump() {
+    protected boolean isInsideJump() {
         return stackDepth[PlayerStack.Type.JUMP.ordinal()] != 0;
     }
 
@@ -229,7 +229,7 @@ public abstract class BasicPlayer {
      *
      * @return -1 if there is no loop, or if it hasn't been reached.
      */
-    public long getLoopPlayTime() {
+    protected long getLoopPlayTime() {
         return loopPlayTime;
     }
 
@@ -275,7 +275,7 @@ public abstract class BasicPlayer {
      *
      * @throws InputError if the stack size has reached the maximum allowed stack depth.
      */
-    protected void stackPush(PlayerStack frame) {
+    void stackPush(PlayerStack frame) {
         if (stack.size() >= maxStackDepth) {
             error("stack overflow (depth limit reached)");
         }
@@ -288,7 +288,7 @@ public abstract class BasicPlayer {
      *
      * @throws InputError if the top stack frame does not match {@code type}.
      */
-    protected PlayerStack stackTop(PlayerStack.Type type) {
+    PlayerStack stackTop(PlayerStack.Type type) {
         if (stack.isEmpty()) {
             stackUnderflow(type);
         }
@@ -304,7 +304,7 @@ public abstract class BasicPlayer {
      *
      * @throws InputError if the top stack frame does not match {@code type}.
      */
-    protected PlayerStack stackPop(PlayerStack.Type type) {
+    PlayerStack stackPop(PlayerStack.Type type) {
         PlayerStack frame = stack.pop();
         stackDepth[type.ordinal()]--;
         if (frame.type != type) {
@@ -314,7 +314,7 @@ public abstract class BasicPlayer {
     }
 
     /** @return null if the stack is empty */
-    protected PlayerStack.Type getStackType() {
+    PlayerStack.Type getStackType() {
         return stack.isEmpty() ? null : stack.peek().type;
     }
 
@@ -323,24 +323,24 @@ public abstract class BasicPlayer {
     }
 
     /** Get a reference to the Song. */
-    protected Song getSong() {
+    Song getSong() {
         return song;
     }
 
     /** @return the track currently being played */
-    protected Track getTrack() {
+    Track getTrack() {
         return track;
     }
 
-    protected void setTrack(Track track) {
+    void setTrack(Track track) {
         this.track = track;
     }
 
-    protected int getPosition() {
+    int getPosition() {
         return position;
     }
 
-    protected void setPosition(int position) {
+    void setPosition(int position) {
         this.position = position;
     }
 

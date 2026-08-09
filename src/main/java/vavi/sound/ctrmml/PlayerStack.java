@@ -23,11 +23,11 @@ public class PlayerStack {
         public static final int MAX_STACK_TYPE = values().length;
     }
 
-    public Type type;
+    public final Type type;
     /** Referenced track. */
-    public Track track;
+    public final Track track;
     /** Event position. */
-    public int position;
+    public final int position;
     /** If {@link Type#LOOP}, points to the end position of the loop. May not be filled in until the loop has iterated once. */
     public int endPosition;
     /** If {@link Type#LOOP}, remaining loop count. */

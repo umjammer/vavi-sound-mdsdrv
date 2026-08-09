@@ -95,33 +95,33 @@ public final class Event implements Cloneable {
         TEMPO;
 
         /** Command ID count. */
-        public static final int CMD_COUNT = values().length;
+        static final int CMD_COUNT = values().length;
         /** First channel cmd ID. */
-        public static final int CHANNEL_CMD = INS.ordinal();
+        static final int CHANNEL_CMD = INS.ordinal();
         /** Channel command count. */
-        public static final int CHANNEL_CMD_COUNT = CMD_COUNT - CHANNEL_CMD;
+        static final int CHANNEL_CMD_COUNT = CMD_COUNT - CHANNEL_CMD;
 
         /** @return true if this is a channel command (i.e. it has a slot in the track state array) */
-        public boolean isChannelCmd() {
+        boolean isChannelCmd() {
             return ordinal() >= CHANNEL_CMD && ordinal() < CMD_COUNT;
         }
     }
 
     /** Sentinel used for a not-yet-played event, {@code UINT_MAX} in the original. */
-    public static final long NO_PLAY_TIME = 0xffff_ffffL;
+    static final long NO_PLAY_TIME = 0xffff_ffffL;
 
     /** The event type. */
     public Type type;
     /** Optional parameter. Signed 16 bit. */
     public int param;
     /** Key-on time (for {@link Type#NOTE} and {@link Type#TIE} types only). Unsigned 16 bit. */
-    public int onTime;
+    int onTime;
     /** Key-off time (for {@link Type#NOTE}, {@link Type#REST} and {@link Type#TIE} types only). Unsigned 16 bit. */
-    public int offTime;
+    int offTime;
     /** Set by a Player to help look up the play time of an event. */
-    public long playTime;
+    long playTime;
     /** Pointer to an input file reference. */
-    public InputRef reference;
+    public final InputRef reference;
 
     public Event(Type type, int param, int onTime, int offTime, long playTime, InputRef reference) {
         this.type = type;

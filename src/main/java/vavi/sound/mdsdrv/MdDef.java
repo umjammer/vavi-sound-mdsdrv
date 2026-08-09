@@ -10,7 +10,7 @@ package vavi.sound.mdsdrv;
  * 
  * Hardware definitions and constants.
  */
-public class MdDef {
+class MdDef {
 
     //
     // Hardware defines
