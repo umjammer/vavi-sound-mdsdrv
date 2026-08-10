@@ -13,7 +13,7 @@ import vavi.sound.mdsdrv.MdsDrv.WorkArea;
 
 
 @Disabled("it's not guaranteed that vgm output is the same as mds output")
-public class MdsPsgTest {
+class MdsPsgTest {
 
     // Structure to hold PSG event with timing
     static class PsgEvent {
@@ -26,7 +26,7 @@ public class MdsPsgTest {
     }
 
     @Test
-    public void testPsgOutput() throws Exception {
+    void testPsgOutput() throws Exception {
         MdsDrv driver;
         WorkArea workArea = new WorkArea();
         

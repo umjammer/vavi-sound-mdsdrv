@@ -22,7 +22,7 @@ import static vavi.sound.SoundUtil.volume;
 
 @EnabledIf("localPropertiesExists")
 @PropsEntity(url = "file:local.properties")
-public class MdsPlayerTest {
+class MdsPlayerTest {
 
     static boolean localPropertiesExists() {
         return Files.exists(Paths.get("local.properties"));

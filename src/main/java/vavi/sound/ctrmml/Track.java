@@ -27,15 +27,15 @@ import java.util.List;
 public class Track {
 
     /** Default octave setting. */
-    public static final int DEFAULT_OCTAVE = 5;
+    private static final int DEFAULT_OCTAVE = 5;
     /** Default measure length (whole note duration). */
-    public static final int DEFAULT_MEASURE_LEN = 96;
+    private static final int DEFAULT_MEASURE_LEN = 96;
     /** Default quantize dividend. */
-    public static final int DEFAULT_QUANTIZE = 8;
+    private static final int DEFAULT_QUANTIZE = 8;
     /** Default quantize divisor. */
-    public static final int DEFAULT_QUANTIZE_PARTS = 8;
+    private static final int DEFAULT_QUANTIZE_PARTS = 8;
     /** Maximum size of the echo buffer. */
-    public static final int ECHO_BUFFER_SIZE = 10;
+    private static final int ECHO_BUFFER_SIZE = 10;
 
     /**
      * Key signatures, indexed by scale.
@@ -112,7 +112,7 @@ public class Track {
     }
 
     /** Appends a new Event to the event list. */
-    public void addEvent(Event.Type type, int param, int onTime, int offTime) {
+    private void addEvent(Event.Type type, int param, int onTime, int offTime) {
         events.add(new Event(type, param, onTime, offTime, Event.NO_PLAY_TIME, reference));
     }
 
@@ -500,7 +500,7 @@ public class Track {
      * @param modifier must be either -1, 0 or 1.
      * @throws IllegalArgumentException Note or modifier parameter is invalid.
      */
-    public void modifyKeySignature(char note, int modifier) {
+    private void modifyKeySignature(char note, int modifier) {
         int n = CType.toLower(note) - 'a';
         if (n > 7) {
             throw new IllegalArgumentException("Track.modifyKeySignature - invalid note");
@@ -550,7 +550,7 @@ public class Track {
      * @param duration If 0, get the default duration as set by {@link #setDuration}. Otherwise
      *                 use the param value.
      */
-    public int getDuration(int duration) {
+    private int getDuration(int duration) {
         return duration == 0 ? defaultDuration : duration;
     }
 
@@ -643,14 +643,14 @@ public class Track {
 
     /** {@code std::length_error} */
     public static class LengthException extends RuntimeException {
-        public LengthException(String message) {
+        LengthException(String message) {
             super(message);
         }
     }
 
     /** {@code std::domain_error} */
     public static class DomainException extends RuntimeException {
-        public DomainException(String message) {
+        DomainException(String message) {
             super(message);
         }
     }

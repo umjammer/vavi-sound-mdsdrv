@@ -267,7 +267,7 @@ public class Player extends BasicPlayer {
      * @param platformState the internal platform command state array
      * @return a bitmask representing the event state variables that were modified
      */
-    protected int parsePlatformEvent(List<String> tag, int[] platformState) {
+    private int parsePlatformEvent(List<String> tag, int[] platformState) {
         return 0;
     }
 
@@ -281,7 +281,7 @@ public class Player extends BasicPlayer {
      * <p>
      * The default handler simply increments a note and rest counter.
      */
-    protected void writeEvent() {
+    private void writeEvent() {
         // Handle NOTE and REST events here.
         if (event.type == Event.Type.NOTE) {
             noteCount++;
@@ -327,7 +327,7 @@ public class Player extends BasicPlayer {
      * Updates the internal channel variables and update flags. If a platform event is
      * encountered, calls override functions to parse and execute those events.
      */
-    protected void handleEvent() {
+    private void handleEvent() {
         switch (event.type) {
         case NOTE -> {
             lastNote = event.param;

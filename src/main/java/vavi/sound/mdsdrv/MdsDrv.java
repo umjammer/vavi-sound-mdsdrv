@@ -30,105 +30,105 @@ public class MdsDrv {
     public static final int MDSDRV_MIN_VER = 0x0003;
 
     public static final int RCOUNT = 4;
-    public static final int TCOUNT = 16;
-    public static final int TSTACK_COUNT = 8;
+    private static final int TCOUNT = 16;
+    private static final int TSTACK_COUNT = 8;
 
-    public static final int rf_active = 15;
-    public static final int rf_stop = 14;
+    private static final int rf_active = 15;
+    private static final int rf_stop = 14;
     public static final int rf_fade_in = 13;
 
-    public static final int nf = 8 + 16;
-    public static final int cf = 0 + 16;
+    private static final int nf = 8 + 16;
+    private static final int cf = 0 + 16;
 
-    public static final int nf_ins = 0;
-    public static final int nf_sustain = nf_ins;
-    public static final int nf_pcm_header = nf_ins;
-    public static final int nf_vol = 1;
-    public static final int nf_fm3 = 2;
-    public static final int nf_pcm_pitch = nf_fm3;
-    public static final int nf_pan_lfo = 3;
-    public static final int nf_nmode = nf_pan_lfo;
-    public static final int nf_slur = 4;
-    public static final int nf_key_off = 5;
-    public static final int nf_key_on = 6;
-    public static final int nf_enabled = 7;
+    private static final int nf_ins = 0;
+    private static final int nf_sustain = nf_ins;
+    private static final int nf_pcm_header = nf_ins;
+    private static final int nf_vol = 1;
+    private static final int nf_fm3 = 2;
+    private static final int nf_pcm_pitch = nf_fm3;
+    private static final int nf_pan_lfo = 3;
+    private static final int nf_nmode = nf_pan_lfo;
+    private static final int nf_slur = 4;
+    private static final int nf_key_off = 5;
+    private static final int nf_key_on = 6;
+    private static final int nf_enabled = 7;
 
-    public static final int cf_drum_mode = 0;
-    public static final int cf_mtab_carry = 1;
-    public static final int cf_pcm_control = 2;
-    public static final int cf_stop = 3;
-    public static final int cf_suspend = 4;
-    public static final int cf_background = 5;
-    public static final int cf_key_on = 7;
+    private static final int cf_drum_mode = 0;
+    private static final int cf_mtab_carry = 1;
+    private static final int cf_pcm_control = 2;
+    private static final int cf_stop = 3;
+    private static final int cf_suspend = 4;
+    private static final int cf_background = 5;
+    private static final int cf_key_on = 7;
 
     // Assembly (mdsdrv.68k) does not force instrument load at init.
     // Removed nf_ins to prevent garbage loading for Raw Mode files.
     // Assembly (mdsdrv.inc line 106): nm_init = nf_ins | nf_pan_lfo | nf_enabled
-    public static final int nm_init = ((1 << nf_ins) | (1 << nf_pan_lfo) | (1 << nf_enabled));
-    public static final int nm_restore = ((1 << nf_key_off) | (1 << nf_ins) | (1 << nf_vol) | (1 << nf_pan_lfo)
+    private static final int nm_init = ((1 << nf_ins) | (1 << nf_pan_lfo) | (1 << nf_enabled));
+    private static final int nm_restore = ((1 << nf_key_off) | (1 << nf_ins) | (1 << nf_vol) | (1 << nf_pan_lfo)
             | (1 << nf_fm3));
-    public static final int cm_pause = ((1 << cf_suspend) | (1 << cf_stop));
+    private static final int cm_pause = ((1 << cf_suspend) | (1 << cf_stop));
 
     public static final int ct_fm = 0;
-    public static final int ct_psg = 6;
+    private static final int ct_psg = 6;
     public static final int ct_psgn = 9;
 
-    public static final int pe_pcm1 = 7;
+    private static final int pe_pcm1 = 7;
     public static final int pe_pcm2 = 6;
     public static final int pe_pcm3 = 5;
-    public static final int pe_fade_stop = 4;
+    private static final int pe_fade_stop = 4;
 
     public static class TrackData {
-        public int t_track_idx;  // Debug: track index in w_track array
-        public int t_note_flag;
-        public int t_channel_flag;
-        public int t_base_addr;
-        public int t_position;
-        public int t_stack_pos;
-        public int t_counter;
-        public int t_rest_time;
-        public int t_note_time;
+        int t_track_idx;  // Debug: track index in w_track array
+        int t_note_flag;
+        int t_channel_flag;
+        int t_base_addr;
+        int t_position;
+        int t_stack_pos;
+        int t_counter;
+        int t_rest_time;
+        int t_note_time;
 
-        public int t_channel_id;
+        int t_channel_id;
         public int t_request_id;
-        public int t_ins;
-        public int t_ins_trs;
-        public int t_note;
-        public int t_dtn;
-        public int t_pitch;
-        public int t_last_pitch;
-        public int t_trs;
-        public int t_pta;
-        public int t_vol;
+        int t_ins;
+        int t_ins_trs;
+        int t_note;
+        int t_dtn;
+        int t_pitch;
+        int t_last_pitch;
+        int t_trs;
+        int t_pta;
+        int t_vol;
 
-        public int t_mtab_repeat;
-        public int t_mtab_addr;
-        public int t_mtab_delay;
-        public int t_mtab_pos;
+        int t_mtab_repeat;
+        int t_mtab_addr;
+        int t_mtab_delay;
+        int t_mtab_pos;
 
-        public int t_peg_addr;
-        public int t_peg_mod;
-        public int t_peg_delay;
-        public int t_peg_pos;
+        int t_peg_addr;
+        int t_peg_mod;
+        int t_peg_delay;
+        int t_peg_pos;
 
-        public final int[] t_stack = new int[TSTACK_COUNT];
+        final int[] t_stack = new int[TSTACK_COUNT];
 
-        public int t_fm_pan_lfo;
-        public int t_fm_alg;
-        public final int[] t_fm_tl = new int[4];
+        int t_fm_pan_lfo;
+        int t_fm_alg;
+        final int[] t_fm_tl = new int[4];
 
-        public int t_psg_eg_addr;
-        public Memory t_psg_env_data; // Added for RIFF support
-        public int t_psg_eg_pos;
-        public int t_psg_eg_delay;
-        public int t_psg_nreset;
-        public int t_psg_nmode;
+        int t_psg_eg_addr;
+        Memory t_psg_env_data; // Added for RIFF support
+        int t_psg_eg_pos;
+        int t_psg_eg_delay;
+        int t_psg_nreset;
+        int t_psg_nmode;
 
         public int t_pcm_pan;
-        public int t_pcm_pitch;
-        public int t_pcm_header;
-        public int t_pcm_length;
-        public int t_op_mask; // FM3 Special Mode mask
+        int t_pcm_pitch;
+        int t_pcm_header;
+        int t_pcm_length;
+        int t_op_mask; // FM3 Special Mode mask
         
         // Debug: Note duration tracking
         public int t_debug_note_frames;
@@ -141,37 +141,37 @@ public class MdsDrv {
 
     public static class WorkArea {
         public Memory w_sdtop;
-        public final int[] w_request = new int[RCOUNT];
-        public final int[] w_tempo = new int[RCOUNT];
-        public final int[] w_counter = new int[RCOUNT];
-        public final int[] w_seq_step = new int[RCOUNT];
-        public final int[] w_volume = new int[RCOUNT];
-        public final int[] w_tmask = new int[RCOUNT];
-        public final int[] w_chmask = new int[RCOUNT];
+        final int[] w_request = new int[RCOUNT];
+        final int[] w_tempo = new int[RCOUNT];
+        final int[] w_counter = new int[RCOUNT];
+        final int[] w_seq_step = new int[RCOUNT];
+        final int[] w_volume = new int[RCOUNT];
+        final int[] w_tmask = new int[RCOUNT];
+        final int[] w_chmask = new int[RCOUNT];
 
-        public int w_bgm_volume;
-        public int w_se_volume;
+        int w_bgm_volume;
+        int w_se_volume;
 
-        public int w_priority;
-        public int w_fade_rate;
+        int w_priority;
+        int w_fade_rate;
 
-        public int w_fade_target;
-        public int w_comm;
-        public int w_fm3_mask; // FM3 Special Mode global mask
+        int w_fade_target;
+        int w_comm;
+        int w_fm3_mask; // FM3 Special Mode global mask
 
-        public int w_pcm_bank;
-        public int w_pcm_mode;
+        int w_pcm_bank;
+        int w_pcm_mode;
         public Memory w_pcm_ptr;  // PCM data pointer (Assembly: a2 in mds_init)
         
-        public int w_pointer_mode; // 0=Standard (Header+4), 1=Raw (Header+0)
-        public int w_fm3_alg;
-        public final int[] w_fm3_tl = new int[4];
+        int w_pointer_mode; // 0=Standard (Header+4), 1=Raw (Header+0)
+        int w_fm3_alg;
+        final int[] w_fm3_tl = new int[4];
 
 
-        public int w_gtempo;
+        int w_gtempo;
         
-        public final Map<Integer, byte[]> globInstruments = new HashMap<>();
-        public final Map<Integer, byte[]> pcmHeaders = new HashMap<>();
+        final Map<Integer, byte[]> globInstruments = new HashMap<>();
+        final Map<Integer, byte[]> pcmHeaders = new HashMap<>();
 
         public final TrackData[] w_track = new TrackData[TCOUNT];
 
@@ -385,7 +385,7 @@ public class MdsDrv {
         a0.w_request[d1] = d0;
     }
 
-    public int mds_command(WorkArea a0, int d0, int d1, int d2) {
+    protected int mds_command(WorkArea a0, int d0, int d1, int d2) {
         if (d0 > 0x12)
             return 0;
 
@@ -621,14 +621,14 @@ public class MdsDrv {
     }
 
     // Abstract IO and Memory methods
-    protected int readIo(int port) {
+    private int readIo(int port) {
         return 0;
     }
 
     protected void writeIo(int port, int data) {
     }
 
-    protected Memory getZ80Ram() {
+    private Memory getZ80Ram() {
         // Use persistent Z80 RAM buffer from class field
         return new Memory() {
             @Override
@@ -681,7 +681,7 @@ public class MdsDrv {
         return getZ80Ram();
     }
 
-    protected int getZVtabOffset() {
+    private int getZVtabOffset() {
         return 0x0F00;
     }
 

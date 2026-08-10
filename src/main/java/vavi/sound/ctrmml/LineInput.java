@@ -33,11 +33,11 @@ import java.nio.charset.StandardCharsets;
  */
 public abstract class LineInput extends Input {
 
-    protected final LineBuffer buffer = new LineBuffer("", 0);
+    private final LineBuffer buffer = new LineBuffer("", 0);
 
     private int line;
 
-    protected LineInput(Song song) {
+    LineInput(Song song) {
         super(song);
     }
 
@@ -56,12 +56,12 @@ public abstract class LineInput extends Input {
     }
 
     @Override
-    protected InputRef getReference() {
+    InputRef getReference() {
         return new InputRef(getFilename(), buffer.buffer.toString(), line, buffer.column);
     }
 
     /** Read a single input line and parse it, optionally also setting the line number. */
-    public void readLine(String inputLine, int lineNumber) {
+    private void readLine(String inputLine, int lineNumber) {
         if (lineNumber >= 0) {
             line = lineNumber;
         }
@@ -78,35 +78,35 @@ public abstract class LineInput extends Input {
 
     // Line_Buffer delegates
 
-    protected int get() {
+    int get() {
         return buffer.get();
     }
 
-    protected int getToken() {
+    int getToken() {
         return buffer.getToken();
     }
 
-    protected int getNum() {
+    int getNum() {
         return buffer.getNum();
     }
 
-    protected String getLine() {
+    String getLine() {
         return buffer.getLine();
     }
 
-    protected void unget(int c) {
+    void unget(int c) {
         buffer.unget(c);
     }
 
-    protected void unget() {
+    void unget() {
         buffer.unget(0);
     }
 
-    protected int tell() {
+    int tell() {
         return buffer.tell();
     }
 
-    protected void seek(int pos) {
+    void seek(int pos) {
         buffer.seek(pos);
     }
 }

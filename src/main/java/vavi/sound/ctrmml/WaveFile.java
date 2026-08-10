@@ -23,7 +23,7 @@ import static java.lang.System.getLogger;
  * @version 0.00 2026-08-02 nsano initial version <br>
  * @see <a href="https://github.com/superctr/ctrmml">ctrmml</a> src/wave.cpp
  */
-public class WaveFile {
+class WaveFile {
 
     private static final Logger logger = getLogger(WaveFile.class.getName());
 
@@ -31,14 +31,14 @@ public class WaveFile {
     private static final int CHUNK_DATA = 0x61746164; // 'data'
     private static final int CHUNK_SMPL = 0x6c706d73; // 'smpl'
 
-    int channels;
-    int stype;
-    int sbits;
+    private int channels;
+    private int stype;
+    private int sbits;
     int srate;
     int slength;
-    int step;
+    private int step;
 
-    boolean useSmplChunk;
+    private boolean useSmplChunk;
     int transpose;
     int lstart;
     int lend;

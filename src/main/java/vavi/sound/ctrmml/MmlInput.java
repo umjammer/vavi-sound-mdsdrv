@@ -47,7 +47,7 @@ public class MmlInput extends LineInput {
         // Or maybe it can be initialized by a previous MmlInput during an "include" command.
     }
 
-    /** Get a list of tracks that were affected by the previous {@link #readLine}. */
+    /** Get a list of tracks that were affected by the previous {@code #readLine}. */
     public Map<Integer, Integer> getTrackMap() {
         Map<Integer, Integer> out = new TreeMap<>();
         if (lastCmd == LastCmd.PARSE_MML) {

@@ -79,7 +79,7 @@ public final class MdsLink {
     }
 
     /** The result of a link: the sequence bank and the PCM bank. */
-    public record Result(byte[] seq, byte[] pcm, String asmHeader, String cHeader, String statistics) {
+    record Result(byte[] seq, byte[] pcm, String asmHeader, String cHeader, String statistics) {
     }
 
     /**
@@ -89,7 +89,7 @@ public final class MdsLink {
      *                 compiled as MML
      * @param resolver used to open the inputs and the PCM samples they reference
      */
-    public static Result link(List<String> inputs, FileResolver resolver) {
+    private static Result link(List<String> inputs, FileResolver resolver) {
         MdsdrvLinker linker = new MdsdrvLinker();
         for (String input : inputs) {
             Riff mds;

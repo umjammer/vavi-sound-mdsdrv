@@ -136,7 +136,7 @@ public final class ByteVector implements Cloneable {
     }
 
     /** {@code resize()}, new elements are zeroed. */
-    public void resize(int newSize) {
+    private void resize(int newSize) {
         if (newSize > size) {
             ensure(newSize);
             Arrays.fill(a, size, newSize, (byte) 0);

@@ -27,7 +27,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 class RiffMdsParserTest {
 
     /** a minimal MDS0 container holding the given "tag " chunk content and an empty sequence */
-    static byte[] mds(byte[] tagData) {
+    private static byte[] mds(byte[] tagData) {
         ByteArrayOutputStream body = new ByteArrayOutputStream();
         chunk(body, "tag ", tagData);
         chunk(body, "seq ", new byte[] {0, 4, 0, 0});
@@ -41,14 +41,14 @@ class RiffMdsParserTest {
         return out.toByteArray();
     }
 
-    static void chunk(ByteArrayOutputStream out, String id, byte[] data) {
+    private static void chunk(ByteArrayOutputStream out, String id, byte[] data) {
         out.writeBytes(id.getBytes(StandardCharsets.ISO_8859_1));
         writeLe32(out, data.length);
         out.writeBytes(data);
         if ((data.length & 1) != 0) out.write(0); // RIFF alignment
     }
 
-    static void writeLe32(ByteArrayOutputStream out, int value) {
+    private static void writeLe32(ByteArrayOutputStream out, int value) {
         out.write(value & 0xff);
         out.write((value >> 8) & 0xff);
         out.write((value >> 16) & 0xff);
@@ -56,7 +56,7 @@ class RiffMdsParserTest {
     }
 
     /** {@code key NUL value NUL}, the value encoded as an MML source of that charset would have it */
-    static byte[] tagData(String key, String value, Charset charset) {
+    private static byte[] tagData(String key, String value, Charset charset) {
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         out.writeBytes(key.getBytes(StandardCharsets.ISO_8859_1));
         out.write(0);
@@ -127,7 +127,7 @@ class RiffMdsParserTest {
         assertTrue(RiffMdsParser.parse(out.toByteArray()).tags.isEmpty());
     }
 
-    static void restore(String was) {
+    private static void restore(String was) {
         if (was == null) {
             System.clearProperty(RiffMdsParser.ENCODING_KEY);
         } else {

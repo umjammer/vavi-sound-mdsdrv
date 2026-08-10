@@ -23,6 +23,7 @@ import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
 import vavi.sound.ctrmml.compiler.Compiler;
+import vavi.sound.ctrmml.platform.MdsdrvLinker;
 import vavi.sound.mdsdrv.driver.MdsDriver;
 import vavi.sound.mdsdrv.RiffMdsParser;
 
@@ -158,7 +159,7 @@ class MdsCompilerTest {
 
     /** Small helper so the test reads like the {@code mdslink} flow. */
     static class MdsdrvLinkerHolder {
-        final vavi.sound.ctrmml.platform.MdsdrvLinker linker = new vavi.sound.ctrmml.platform.MdsdrvLinker();
+        final MdsdrvLinker linker = new MdsdrvLinker();
 
         void add(String name) throws IOException {
             linker.addSong(compile(name), name.substring(name.indexOf('/') + 1));

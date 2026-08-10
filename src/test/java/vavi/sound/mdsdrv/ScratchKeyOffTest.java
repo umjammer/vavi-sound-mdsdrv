@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 
 /** scratch: does a finished track key its FM channel off? */
 @Disabled("for ai iteration")
-public class ScratchKeyOffTest {
+class ScratchKeyOffTest {
 
     static class Act implements ChipAction {
         final String name;
@@ -33,7 +33,7 @@ public class ScratchKeyOffTest {
     }
 
     @Test
-    public void test() throws Exception {
+    void test() throws Exception {
         Path p = Path.of("src/test/resources/data/bgm/junkers_high.mds");
         byte[] data = Files.readAllBytes(p);
 
